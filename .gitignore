@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Local environment secrets
+.env
+.env.local
+.env.development.local
+.env.production.local
+.env.*.local
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

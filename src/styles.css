@@ -1,0 +1,29 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply m-0 bg-surface font-body text-text;
+}
+
+#root {
+  @apply min-h-screen;
+}
+
+.card {
+  @apply rounded-2xl bg-card p-6 shadow-card transition-shadow hover:shadow-hover;
+}
+
+.input {
+  @apply w-full rounded-lg border border-border bg-white px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20;
+}
+
+.btn-primary {
+  @apply rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white transition hover:bg-primary-soft focus:outline-none focus:ring-2 focus:ring-primary/25;
+}
+
+.btn-secondary {
+  @apply rounded-lg border border-border bg-white px-4 py-2 text-sm font-semibold text-text transition hover:bg-surface;
+}
