@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AppView, AssetItem, CampaignHistoryItem, CampaignMetrics, ContactRecord, EmailTemplate } from "../types";
+import type { AppView, AssetItem, CampaignHistoryItem, CampaignMetrics, ContactRecord, EmailTemplate, Project } from "../types";
 
 type MailerState = {
   currentView: AppView;
@@ -10,6 +10,7 @@ type MailerState = {
   assets: AssetItem[];
   campaigns: CampaignHistoryItem[];
   templates: EmailTemplate[];
+  projects: Project[];
   selectedTemplateId: string | null;
   setCurrentView: (view: AppView) => void;
   setContacts: (contacts: ContactRecord[], metrics: CampaignMetrics) => void;
@@ -25,6 +26,9 @@ type MailerState = {
   addTemplate: (template: EmailTemplate) => void;
   updateTemplate: (template: EmailTemplate) => void;
   removeTemplate: (id: string) => void;
+  setProjects: (projects: Project[]) => void;
+  addProject: (project: Project) => void;
+  removeProject: (id: string) => void;
   setSelectedTemplateId: (id: string | null) => void;
 };
 
@@ -44,6 +48,7 @@ export const useMailerStore = create<MailerState>((set) => ({
   assets: [],
   campaigns: [],
   templates: [],
+  projects: [],
   selectedTemplateId: null,
   setCurrentView: (currentView) => set({ currentView }),
   setContacts: (contacts, metrics) => set({ contacts, metrics }),
@@ -60,5 +65,14 @@ export const useMailerStore = create<MailerState>((set) => ({
   updateTemplate: (template) =>
     set((state) => ({ templates: state.templates.map((t) => (t.id === template.id ? template : t)) })),
   removeTemplate: (id) => set((state) => ({ templates: state.templates.filter((t) => t.id !== id) })),
+  setProjects: (projects) => set({ projects }),
+  addProject: (project) =>
+    set((state) => ({ projects: [...state.projects, project].sort((a, b) => a.name.localeCompare(b.name)) })),
+  removeProject: (id) =>
+    set((state) => ({
+      projects: state.projects.filter((p) => p.id !== id),
+      // Las plantillas del proyecto borrado pasan a General (project_id = null).
+      templates: state.templates.map((t) => (t.projectId === id ? { ...t, projectId: null } : t))
+    })),
   setSelectedTemplateId: (selectedTemplateId) => set({ selectedTemplateId })
 }));

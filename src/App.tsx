@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import Layout from "./components/Layout";
-import { deleteAsset, deleteCampaign, listAssets, listCampaigns, listTemplates, saveTemplate } from "./lib/db";
+import { createProject, deleteAsset, deleteCampaign, listAssets, listCampaigns, listProjects, listTemplates, saveTemplate, setTemplateProject } from "./lib/db";
 import { BASE_TEMPLATES } from "./data/baseTemplates";
 import TemplatesLibraryView from "./views/TemplatesLibraryView";
 import TemplateEditorView from "./views/TemplateEditorView";
@@ -18,6 +18,7 @@ export default function App() {
     metrics,
     assets,
     templates,
+    projects,
     selectedTemplateId,
     addAsset,
     removeAsset,
@@ -29,6 +30,8 @@ export default function App() {
     addTemplate,
     updateTemplate,
     removeTemplate,
+    setProjects,
+    addProject,
     setSelectedTemplateId
   } = useMailerStore();
 
@@ -40,15 +43,32 @@ export default function App() {
     async function syncCampaignsAndAssets() {
       if (!hasSupabaseConfig) return;
       try {
-        const [campaignRows, assetRows] = await Promise.all([listCampaigns(), listAssets()]);
+        const [campaignRows, assetRows, projectRows] = await Promise.all([
+          listCampaigns(),
+          listAssets(),
+          listProjects()
+        ]);
         setCampaigns(campaignRows);
         setAssets(assetRows);
+        setProjects(projectRows);
       } catch (error) {
-        console.error("Error sincronizando campañas/activos:", error);
+        console.error("Error sincronizando campañas/activos/proyectos:", error);
       }
     }
     void syncCampaignsAndAssets();
-  }, [setAssets, setCampaigns]);
+  }, [setAssets, setCampaigns, setProjects]);
+
+  async function handleCreateProject(name: string) {
+    const project = await createProject(name);
+    addProject(project);
+    return project;
+  }
+
+  async function handleAssignProject(templateId: string, projectId: string | null) {
+    const updated = await setTemplateProject(templateId, projectId);
+    updateTemplate(updated);
+    return updated;
+  }
 
   useEffect(() => {
     async function loadTemplates() {
@@ -131,9 +151,11 @@ export default function App() {
       {currentView === "templates" && (
         <TemplatesLibraryView
           templates={templates}
+          projects={projects}
           loading={templateLoading}
           error={templateError}
           onRetry={() => setTemplateRetry((n) => n + 1)}
+          onAssignProject={handleAssignProject}
           onEdit={(id) => {
             setSelectedTemplateId(id);
             setCurrentView("template-editor");
@@ -148,6 +170,8 @@ export default function App() {
         <TemplateEditorView
           key={selectedTemplateId ?? "new"}
           initialTemplate={templates.find((t) => t.id === selectedTemplateId) ?? null}
+          projects={projects}
+          onCreateProject={handleCreateProject}
           onSaved={(template) => {
             if (selectedTemplateId) {
               updateTemplate(template);

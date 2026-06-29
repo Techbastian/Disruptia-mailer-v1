@@ -30,6 +30,12 @@ export type CampaignHistoryItem = {
   status: "draft" | "queued" | "sent" | "failed";
 };
 
+export type Project = {
+  id: string;
+  name: string;
+  createdAt: string;
+};
+
 export type EmailTemplate = {
   id: string;
   name: string;
@@ -37,6 +43,7 @@ export type EmailTemplate = {
   html: string;
   variablesCsv: string[];
   variablesCampaign: string[];
+  projectId: string | null;
   createdAt: string;
   updatedAt: string;
 };

@@ -1,15 +1,21 @@
-import { useState } from "react";
-import { AlertTriangle, Clock, FilePlus, Pencil, RefreshCw, X } from "lucide-react";
-import type { EmailTemplate } from "../types";
+import { useMemo, useState } from "react";
+import { AlertTriangle, Clock, FilePlus, FolderKanban, Pencil, RefreshCw, X } from "lucide-react";
+import type { EmailTemplate, Project } from "../types";
+import { sanitizeHtml } from "../lib/sanitizeHtml";
 
 type TemplatesLibraryViewProps = {
   templates: EmailTemplate[];
+  projects: Project[];
   loading: boolean;
   error: string | null;
   onRetry: () => void;
   onEdit: (id: string) => void;
   onNew: () => void;
+  onAssignProject: (templateId: string, projectId: string | null) => Promise<EmailTemplate>;
 };
+
+// "all" = todas | "general" = solo agnosticas | <id> = proyecto (incluye General)
+type ProjectFilter = "all" | "general" | string;
 
 function VariableBadge({ label, kind }: { label: string; kind: "csv" | "campaign" }) {
   return (
@@ -27,13 +33,28 @@ function VariableBadge({ label, kind }: { label: string; kind: "csv" | "campaign
 
 function TemplateModal({
   template,
+  projects,
+  onAssignProject,
   onEdit,
   onClose
 }: {
   template: EmailTemplate;
+  projects: Project[];
+  onAssignProject: (projectId: string | null) => Promise<void>;
   onEdit: () => void;
   onClose: () => void;
 }) {
+  const [assigning, setAssigning] = useState(false);
+
+  async function handleAssign(value: string) {
+    setAssigning(true);
+    try {
+      await onAssignProject(value || null);
+    } finally {
+      setAssigning(false);
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
@@ -52,6 +73,22 @@ function TemplateModal({
             )}
           </div>
           <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5 text-xs font-semibold text-text-muted">
+              Proyecto:
+              <select
+                className="input py-1.5 text-sm"
+                value={template.projectId ?? ""}
+                disabled={assigning}
+                onChange={(e) => void handleAssign(e.target.value)}
+              >
+                <option value="">General</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button
               type="button"
               onClick={onEdit}
@@ -80,7 +117,7 @@ function TemplateModal({
             </p>
             <iframe
               title="Preview plantilla"
-              srcDoc={template.html}
+              srcDoc={sanitizeHtml(template.html)}
               sandbox="allow-popups allow-popups-to-escape-sandbox"
               className="h-full w-full bg-white"
               style={{ height: "calc(100% - 33px)" }}
@@ -141,7 +178,7 @@ function TemplateCard({
         >
           <iframe
             title="preview"
-            srcDoc={template.html}
+            srcDoc={sanitizeHtml(template.html)}
             sandbox="allow-popups"
             style={{ width: "600px", height: "900px", border: "none" }}
           />
@@ -181,17 +218,93 @@ function TemplateCard({
   );
 }
 
+// ── Filtro por proyecto ───────────────────────────────────────────────────────
+
+function ProjectFilterBar({
+  projects,
+  filter,
+  onChange,
+  counts
+}: {
+  projects: Project[];
+  filter: ProjectFilter;
+  onChange: (filter: ProjectFilter) => void;
+  counts: { all: number; general: number };
+}) {
+  const chip = (value: ProjectFilter, label: string, count?: number) => (
+    <button
+      key={value}
+      type="button"
+      onClick={() => onChange(value)}
+      className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold transition ${
+        filter === value
+          ? "bg-primary text-white"
+          : "border border-border text-text-muted hover:bg-surface"
+      }`}
+    >
+      {label}
+      {count !== undefined && (
+        <span className={`text-xs ${filter === value ? "text-white/70" : "text-text-muted"}`}>{count}</span>
+      )}
+    </button>
+  );
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {chip("all", "Todas", counts.all)}
+      {chip("general", "General", counts.general)}
+      {projects.length > 0 && <span className="mx-1 h-5 w-px bg-border" />}
+      {projects.map((p) => chip(p.id, p.name))}
+    </div>
+  );
+}
+
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 export default function TemplatesLibraryView({
   templates,
+  projects,
   loading,
   error,
   onRetry,
   onEdit,
-  onNew
+  onNew,
+  onAssignProject
 }: TemplatesLibraryViewProps) {
   const [activeTemplate, setActiveTemplate] = useState<EmailTemplate | null>(null);
+  const [filter, setFilter] = useState<ProjectFilter>("all");
+
+  const GENERAL_KEY = "__general__";
+
+  // Particion en secciones: General + una por proyecto. Cada plantilla aparece una sola vez.
+  // "all" → todas las secciones; "general" → solo General; <projectId> → solo ese proyecto.
+  const sections = useMemo(() => {
+    const nameOf = new Map(projects.map((p) => [p.id, p.name]));
+    const groups = new Map<string, { key: string; title: string; templates: EmailTemplate[] }>();
+
+    for (const t of templates) {
+      const key = t.projectId ?? GENERAL_KEY;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          title: t.projectId ? nameOf.get(t.projectId) ?? "Proyecto" : "General",
+          templates: []
+        });
+      }
+      groups.get(key)!.templates.push(t);
+    }
+
+    let arr = [...groups.values()].sort((a, b) => {
+      if (a.key === GENERAL_KEY) return -1;
+      if (b.key === GENERAL_KEY) return 1;
+      return a.title.localeCompare(b.title);
+    });
+
+    if (filter === "general") arr = arr.filter((g) => g.key === GENERAL_KEY);
+    else if (filter !== "all") arr = arr.filter((g) => g.key === filter);
+
+    return arr;
+  }, [templates, projects, filter]);
 
   function renderBody() {
     if (error) {
@@ -243,6 +356,16 @@ export default function TemplatesLibraryView({
 
     return (
       <>
+        <ProjectFilterBar
+          projects={projects}
+          filter={filter}
+          onChange={setFilter}
+          counts={{
+            all: templates.length,
+            general: templates.filter((t) => t.projectId === null).length
+          }}
+        />
+
         <div className="flex gap-4 text-xs text-text-muted">
           <span className="flex items-center gap-1">
             <span className="inline-block h-2 w-2 rounded-full bg-primary/40" />
@@ -253,15 +376,39 @@ export default function TemplatesLibraryView({
             Variable de campaña (la llena el usuario)
           </span>
         </div>
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {templates.map((template) => (
-            <TemplateCard
-              key={template.id}
-              template={template}
-              onClick={() => setActiveTemplate(template)}
-            />
-          ))}
-        </div>
+
+        {sections.length === 0 ? (
+          <div className="card flex flex-col items-center justify-center gap-2 py-12 text-center">
+            <FolderKanban size={20} className="text-text-muted" />
+            <p className="font-heading font-semibold">No hay plantillas en este filtro</p>
+            <p className="text-sm text-text-muted">
+              Este proyecto todavía no tiene plantillas asignadas.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-8">
+            {sections.map((section) => (
+              <section key={section.key} className="space-y-4">
+                <div className="flex items-center gap-2 border-b border-border pb-2">
+                  <FolderKanban size={16} className="text-text-muted" />
+                  <h2 className="font-heading text-lg font-semibold">{section.title}</h2>
+                  <span className="rounded-full bg-surface px-2 py-0.5 text-xs font-semibold text-text-muted">
+                    {section.templates.length}
+                  </span>
+                </div>
+                <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                  {section.templates.map((template) => (
+                    <TemplateCard
+                      key={template.id}
+                      template={template}
+                      onClick={() => setActiveTemplate(template)}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
       </>
     );
   }
@@ -286,6 +433,11 @@ export default function TemplatesLibraryView({
       {activeTemplate && (
         <TemplateModal
           template={activeTemplate}
+          projects={projects}
+          onAssignProject={async (projectId) => {
+            const updated = await onAssignProject(activeTemplate.id, projectId);
+            setActiveTemplate(updated);
+          }}
           onEdit={() => {
             onEdit(activeTemplate.id);
             setActiveTemplate(null);

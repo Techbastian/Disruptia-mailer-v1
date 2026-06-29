@@ -1,4 +1,4 @@
-import { Bell, BarChart3, FolderKanban, LayoutTemplate, MailPlus, Search } from "lucide-react";
+import { BarChart3, FolderKanban, LayoutTemplate, MailPlus } from "lucide-react";
 import type { ReactNode } from "react";
 import type { AppView } from "../types";
 
@@ -40,17 +40,8 @@ export default function Layout({ view, onChangeView, children }: LayoutProps) {
 
       <div className="ml-[280px]">
         <header className="sticky top-0 z-10 border-b border-border bg-card px-8 py-4">
-          <div className="flex items-center justify-between gap-4">
-            <label className="flex w-full max-w-md items-center gap-2 rounded-lg border border-border px-3 py-2">
-              <Search size={16} className="text-text-muted" />
-              <input className="w-full bg-transparent text-sm outline-none" placeholder="Buscar campanas o activos" />
-            </label>
-            <div className="flex items-center gap-3">
-              <button className="rounded-lg border border-border p-2" type="button" aria-label="Notificaciones">
-                <Bell size={16} />
-              </button>
-              <div className="rounded-full bg-primary px-3 py-1 text-xs font-semibold text-white">Equipo Disruptia</div>
-            </div>
+          <div className="flex items-center justify-end gap-4">
+            <div className="rounded-full bg-primary px-3 py-1 text-xs font-semibold text-white">Equipo Disruptia</div>
           </div>
         </header>
         <main className="mx-auto max-w-[1440px] p-8">{children}</main>

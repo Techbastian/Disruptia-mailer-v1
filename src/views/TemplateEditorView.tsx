@@ -1,10 +1,13 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, ArrowLeft, Plus, Save, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, Plus, Save, Trash2, X } from "lucide-react";
 import { deleteTemplate, saveTemplate } from "../lib/db";
-import type { EmailTemplate } from "../types";
+import { sanitizeHtml } from "../lib/sanitizeHtml";
+import type { EmailTemplate, Project } from "../types";
 
 type TemplateEditorViewProps = {
   initialTemplate: EmailTemplate | null;
+  projects: Project[];
+  onCreateProject: (name: string) => Promise<Project>;
   onSaved: (template: EmailTemplate) => void;
   onDeleted: () => void;
   onCancel: () => void;
@@ -96,6 +99,8 @@ function VariableSection({
 
 export default function TemplateEditorView({
   initialTemplate,
+  projects,
+  onCreateProject,
   onSaved,
   onDeleted,
   onCancel
@@ -107,12 +112,33 @@ export default function TemplateEditorView({
   const [html, setHtml] = useState(initialTemplate?.html ?? "");
   const [variablesCsv, setVariablesCsv] = useState<string[]>(initialTemplate?.variablesCsv ?? []);
   const [variablesCampaign, setVariablesCampaign] = useState<string[]>(initialTemplate?.variablesCampaign ?? []);
+  const [projectId, setProjectId] = useState<string | null>(initialTemplate?.projectId ?? null);
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
+  const [savingProject, setSavingProject] = useState(false);
   const [newCsvVar, setNewCsvVar] = useState("");
   const [newCampaignVar, setNewCampaignVar] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState("");
+
+  async function handleCreateProject() {
+    const trimmed = newProjectName.trim();
+    if (!trimmed) return;
+    setSavingProject(true);
+    setError("");
+    try {
+      const project = await onCreateProject(trimmed);
+      setProjectId(project.id);
+      setNewProjectName("");
+      setCreatingProject(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No fue posible crear el proyecto.");
+    } finally {
+      setSavingProject(false);
+    }
+  }
 
   const allDeclared = useMemo(
     () => new Set([...variablesCsv, ...variablesCampaign]),
@@ -152,7 +178,8 @@ export default function TemplateEditorView({
         description: description.trim(),
         html,
         variablesCsv,
-        variablesCampaign
+        variablesCampaign,
+        projectId
       });
       onSaved(result);
     } catch (caught) {
@@ -221,6 +248,71 @@ export default function TemplateEditorView({
                 placeholder="Para qué sirve esta plantilla..."
               />
             </div>
+          </article>
+
+          <article className="card space-y-3">
+            <div>
+              <p className="font-heading font-semibold">Proyecto</p>
+              <p className="text-xs text-text-muted">
+                "General" la hace visible en todos los proyectos.
+              </p>
+            </div>
+
+            {!creatingProject ? (
+              <>
+                <select
+                  className="input"
+                  value={projectId ?? ""}
+                  onChange={(e) => setProjectId(e.target.value || null)}
+                >
+                  <option value="">General (todos los proyectos)</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setCreatingProject(true)}
+                  className="flex items-center gap-1 text-sm font-semibold text-primary hover:underline"
+                >
+                  <Plus size={14} />
+                  Crear proyecto nuevo
+                </button>
+              </>
+            ) : (
+              <div className="flex gap-2">
+                <input
+                  className="input flex-1 py-1.5 text-sm"
+                  placeholder="Nombre del proyecto"
+                  value={newProjectName}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && void handleCreateProject()}
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleCreateProject()}
+                  disabled={!newProjectName.trim() || savingProject}
+                  className="btn-secondary flex items-center gap-1 px-3 py-1.5 text-sm disabled:opacity-40"
+                  aria-label="Confirmar proyecto"
+                >
+                  <Check size={14} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreatingProject(false);
+                    setNewProjectName("");
+                  }}
+                  className="flex items-center rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-surface"
+                  aria-label="Cancelar"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
           </article>
 
           <article className="card space-y-5">
@@ -340,7 +432,7 @@ export default function TemplateEditorView({
             </div>
             <iframe
               title="Preview plantilla"
-              srcDoc={html || "<p style='padding:24px;color:#aaa;font-family:Arial'>El preview aparecerá aquí cuando agregues HTML.</p>"}
+              srcDoc={html ? sanitizeHtml(html) : "<p style='padding:24px;color:#aaa;font-family:Arial'>El preview aparecerá aquí cuando agregues HTML.</p>"}
               sandbox="allow-popups allow-popups-to-escape-sandbox"
               className="h-[600px] w-full rounded-xl border border-border bg-white"
             />

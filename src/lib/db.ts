@@ -1,4 +1,4 @@
-import type { AssetItem, CampaignHistoryItem, EmailTemplate } from "../types";
+import type { AssetItem, CampaignHistoryItem, EmailTemplate, Project } from "../types";
 import { DEFAULT_ACTOR_ID, supabase, SUPABASE_BUCKET_ASSETS } from "./supabase";
 
 type CreateCampaignInput = {
@@ -92,6 +92,9 @@ export async function listAssets(): Promise<AssetItem[]> {
 
 // ── Templates ────────────────────────────────────────────────────────────────
 
+const TEMPLATE_SELECT =
+  "id,name,description,html,variables_csv,variables_campaign,project_id,created_at,updated_at";
+
 function rowToTemplate(row: Record<string, unknown>): EmailTemplate {
   return {
     id: row.id as string,
@@ -100,6 +103,7 @@ function rowToTemplate(row: Record<string, unknown>): EmailTemplate {
     html: row.html as string,
     variablesCsv: (row.variables_csv as string[]) ?? [],
     variablesCampaign: (row.variables_campaign as string[]) ?? [],
+    projectId: (row.project_id as string | null) ?? null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string
   };
@@ -109,7 +113,7 @@ export async function listTemplates(): Promise<EmailTemplate[]> {
   const client = ensureSupabase();
   const { data, error } = await client
     .from("email_templates")
-    .select("id,name,description,html,variables_csv,variables_campaign,created_at,updated_at")
+    .select(TEMPLATE_SELECT)
     .order("created_at", { ascending: false });
   if (error) throw error;
   return (data ?? []).map(rowToTemplate);
@@ -119,7 +123,7 @@ export async function getTemplate(id: string): Promise<EmailTemplate> {
   const client = ensureSupabase();
   const { data, error } = await client
     .from("email_templates")
-    .select("id,name,description,html,variables_csv,variables_campaign,created_at,updated_at")
+    .select(TEMPLATE_SELECT)
     .eq("id", id)
     .single();
   if (error) throw error;
@@ -133,6 +137,7 @@ export type SaveTemplateInput = {
   html: string;
   variablesCsv: string[];
   variablesCampaign: string[];
+  projectId?: string | null;
 };
 
 export async function saveTemplate(input: SaveTemplateInput): Promise<EmailTemplate> {
@@ -143,9 +148,10 @@ export async function saveTemplate(input: SaveTemplateInput): Promise<EmailTempl
     html: input.html,
     variables_csv: input.variablesCsv,
     variables_campaign: input.variablesCampaign,
+    project_id: input.projectId ?? null,
     updated_at: new Date().toISOString()
   };
-  const select = "id,name,description,html,variables_csv,variables_campaign,created_at,updated_at";
+  const select = TEMPLATE_SELECT;
 
   if (input.id) {
     const { data, error } = await client
@@ -170,6 +176,57 @@ export async function saveTemplate(input: SaveTemplateInput): Promise<EmailTempl
 export async function deleteTemplate(id: string): Promise<void> {
   const client = ensureSupabase();
   const { error } = await client.from("email_templates").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// Reasignacion rapida de proyecto (projectId = null → General).
+export async function setTemplateProject(id: string, projectId: string | null): Promise<EmailTemplate> {
+  const client = ensureSupabase();
+  const { data, error } = await client
+    .from("email_templates")
+    .update({ project_id: projectId, updated_at: new Date().toISOString() })
+    .eq("id", id)
+    .select(TEMPLATE_SELECT)
+    .single();
+  if (error) throw error;
+  return rowToTemplate(data);
+}
+
+// ── Projects ──────────────────────────────────────────────────────────────────
+
+function rowToProject(row: Record<string, unknown>): Project {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    createdAt: row.created_at as string
+  };
+}
+
+export async function listProjects(): Promise<Project[]> {
+  const client = ensureSupabase();
+  const { data, error } = await client
+    .from("projects")
+    .select("id,name,created_at")
+    .order("name", { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map(rowToProject);
+}
+
+export async function createProject(name: string): Promise<Project> {
+  const client = ensureSupabase();
+  const { data, error } = await client
+    .from("projects")
+    .insert({ name, created_by: DEFAULT_ACTOR_ID })
+    .select("id,name,created_at")
+    .single();
+  if (error) throw error;
+  return rowToProject(data);
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  const client = ensureSupabase();
+  // Las plantillas asociadas pasan a General por ON DELETE SET NULL.
+  const { error } = await client.from("projects").delete().eq("id", id);
   if (error) throw error;
 }
 

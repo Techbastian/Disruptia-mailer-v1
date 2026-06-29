@@ -84,6 +84,10 @@ function Step1({
   const [parseError, setParseError] = useState("");
 
   async function handleFile(file: File) {
+    if (!/\.(csv|xlsx)$/i.test(file.name)) {
+      setParseError("Formato no soportado. Subí un archivo .csv o .xlsx.");
+      return;
+    }
     setParsing(true);
     setParseError("");
     try {
@@ -284,7 +288,7 @@ function Step2({
                 >
                   <iframe
                     title={t.name}
-                    srcDoc={t.html}
+                    srcDoc={sanitizeHtml(t.html)}
                     sandbox="allow-popups"
                     style={{ width: "600px", height: "900px", border: "none" }}
                   />
