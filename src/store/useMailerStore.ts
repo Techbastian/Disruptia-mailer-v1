@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { AppView, AssetItem, CampaignHistoryItem, CampaignMetrics, ContactRecord, EmailTemplate, Project } from "../types";
+import type { AppView, AssetItem, CampaignHistoryItem, CampaignMetrics, ContactRecord, EmailTemplate, Project, WhatsAppTemplate } from "../types";
 
 type MailerState = {
   currentView: AppView;
@@ -11,7 +11,9 @@ type MailerState = {
   campaigns: CampaignHistoryItem[];
   templates: EmailTemplate[];
   projects: Project[];
+  whatsappTemplates: WhatsAppTemplate[];
   selectedTemplateId: string | null;
+  selectedWhatsAppTemplateId: string | null;
   setCurrentView: (view: AppView) => void;
   setContacts: (contacts: ContactRecord[], metrics: CampaignMetrics) => void;
   setPrompt: (prompt: string) => void;
@@ -29,7 +31,12 @@ type MailerState = {
   setProjects: (projects: Project[]) => void;
   addProject: (project: Project) => void;
   removeProject: (id: string) => void;
+  setWhatsappTemplates: (templates: WhatsAppTemplate[]) => void;
+  addWhatsappTemplate: (template: WhatsAppTemplate) => void;
+  updateWhatsappTemplate: (template: WhatsAppTemplate) => void;
+  removeWhatsappTemplate: (id: string) => void;
   setSelectedTemplateId: (id: string | null) => void;
+  setSelectedWhatsAppTemplateId: (id: string | null) => void;
 };
 
 const initialMetrics: CampaignMetrics = {
@@ -49,7 +56,9 @@ export const useMailerStore = create<MailerState>((set) => ({
   campaigns: [],
   templates: [],
   projects: [],
+  whatsappTemplates: [],
   selectedTemplateId: null,
+  selectedWhatsAppTemplateId: null,
   setCurrentView: (currentView) => set({ currentView }),
   setContacts: (contacts, metrics) => set({ contacts, metrics }),
   setPrompt: (prompt) => set({ prompt }),
@@ -74,5 +83,15 @@ export const useMailerStore = create<MailerState>((set) => ({
       // Las plantillas del proyecto borrado pasan a General (project_id = null).
       templates: state.templates.map((t) => (t.projectId === id ? { ...t, projectId: null } : t))
     })),
-  setSelectedTemplateId: (selectedTemplateId) => set({ selectedTemplateId })
+  setWhatsappTemplates: (whatsappTemplates) => set({ whatsappTemplates }),
+  addWhatsappTemplate: (template) =>
+    set((state) => ({ whatsappTemplates: [template, ...state.whatsappTemplates] })),
+  updateWhatsappTemplate: (template) =>
+    set((state) => ({
+      whatsappTemplates: state.whatsappTemplates.map((t) => (t.id === template.id ? template : t))
+    })),
+  removeWhatsappTemplate: (id) =>
+    set((state) => ({ whatsappTemplates: state.whatsappTemplates.filter((t) => t.id !== id) })),
+  setSelectedTemplateId: (selectedTemplateId) => set({ selectedTemplateId }),
+  setSelectedWhatsAppTemplateId: (selectedWhatsAppTemplateId) => set({ selectedWhatsAppTemplateId })
 }));

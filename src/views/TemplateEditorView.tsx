@@ -1,12 +1,16 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, ArrowLeft, Check, Plus, Save, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, Plus, Save, Sparkles, Trash2, X } from "lucide-react";
 import { deleteTemplate, saveTemplate } from "../lib/db";
+import { generateTemplateHtml, pickBaseTemplate } from "../lib/ai";
 import { sanitizeHtml } from "../lib/sanitizeHtml";
-import type { EmailTemplate, Project } from "../types";
+import type { AssetItem, EmailTemplate, Project } from "../types";
 
 type TemplateEditorViewProps = {
   initialTemplate: EmailTemplate | null;
+  templates: EmailTemplate[];
   projects: Project[];
+  assets: AssetItem[];
+  initialDraft?: { html: string; projectId: string | null } | null;
   onCreateProject: (name: string) => Promise<Project>;
   onSaved: (template: EmailTemplate) => void;
   onDeleted: () => void;
@@ -99,7 +103,10 @@ function VariableSection({
 
 export default function TemplateEditorView({
   initialTemplate,
+  templates,
   projects,
+  assets,
+  initialDraft,
   onCreateProject,
   onSaved,
   onDeleted,
@@ -109,19 +116,60 @@ export default function TemplateEditorView({
 
   const [name, setName] = useState(initialTemplate?.name ?? "");
   const [description, setDescription] = useState(initialTemplate?.description ?? "");
-  const [html, setHtml] = useState(initialTemplate?.html ?? "");
+  const [html, setHtml] = useState(initialTemplate?.html ?? initialDraft?.html ?? "");
   const [variablesCsv, setVariablesCsv] = useState<string[]>(initialTemplate?.variablesCsv ?? []);
   const [variablesCampaign, setVariablesCampaign] = useState<string[]>(initialTemplate?.variablesCampaign ?? []);
-  const [projectId, setProjectId] = useState<string | null>(initialTemplate?.projectId ?? null);
+  const [projectId, setProjectId] = useState<string | null>(
+    initialTemplate?.projectId ?? initialDraft?.projectId ?? null
+  );
   const [creatingProject, setCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [savingProject, setSavingProject] = useState(false);
   const [newCsvVar, setNewCsvVar] = useState("");
   const [newCampaignVar, setNewCampaignVar] = useState("");
+  const [aiContent, setAiContent] = useState("");
+  const [aiBaseProjectId, setAiBaseProjectId] = useState<string | null>(
+    initialTemplate?.projectId ?? initialDraft?.projectId ?? null
+  );
+  const [aiBannerAssetId, setAiBannerAssetId] = useState<string>("");
+  const [generating, setGenerating] = useState(false);
+  const [aiError, setAiError] = useState("");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState("");
+
+  const imageAssets = useMemo(() => assets.filter((a) => a.kind === "image"), [assets]);
+
+  // Molde de estilo: plantilla mas reciente del proyecto base (excluye la que se edita).
+  const baseTemplate = useMemo(
+    () => pickBaseTemplate(templates, aiBaseProjectId, initialTemplate?.id),
+    [templates, aiBaseProjectId, initialTemplate?.id]
+  );
+
+  async function handleGenerate() {
+    if (!aiContent.trim()) {
+      setAiError("Escribí el contenido del correo para generar la plantilla.");
+      return;
+    }
+    setAiError("");
+    setGenerating(true);
+    try {
+      const bannerImageUrl = imageAssets.find((a) => a.id === aiBannerAssetId)?.publicUrl ?? null;
+      const generated = await generateTemplateHtml({
+        content: aiContent,
+        variables: [...variablesCsv, ...variablesCampaign],
+        baseProjectId: aiBaseProjectId,
+        referenceTemplate: baseTemplate,
+        bannerImageUrl
+      });
+      setHtml(generated);
+    } catch (caught) {
+      setAiError(caught instanceof Error ? caught.message : "No fue posible generar la plantilla.");
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   async function handleCreateProject() {
     const trimmed = newProjectName.trim();
@@ -405,8 +453,81 @@ export default function TemplateEditorView({
           </div>
         </div>
 
-        {/* ── Panel derecho: editor HTML + preview ── */}
+        {/* ── Panel derecho: generador IA + editor HTML + preview ── */}
         <div className="space-y-4">
+          <article className="card space-y-3 border border-primary/20 bg-primary/[0.03]">
+            <div className="flex items-center gap-2">
+              <Sparkles size={16} className="text-primary" />
+              <h2 className="font-heading text-sm font-semibold">Generar con IA</h2>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold">Basar estilo en</label>
+                <select
+                  className="input mt-1 py-1.5 text-sm"
+                  value={aiBaseProjectId ?? ""}
+                  onChange={(e) => setAiBaseProjectId(e.target.value || null)}
+                  disabled={generating}
+                >
+                  <option value="">General (marca)</option>
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold">Banner superior</label>
+                <select
+                  className="input mt-1 py-1.5 text-sm"
+                  value={aiBannerAssetId}
+                  onChange={(e) => setAiBannerAssetId(e.target.value)}
+                  disabled={generating}
+                >
+                  <option value="">
+                    {aiBaseProjectId ? "Conservar el del molde" : "Franja morada + texto"}
+                  </option>
+                  {imageAssets.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <p className="text-xs text-text-muted">
+              {baseTemplate
+                ? `Clonará la estructura e identidad de "${baseTemplate.name}". Escribí solo el contenido.`
+                : "Base General: usará los lineamientos de marca Disruptia."}
+            </p>
+
+            <textarea
+              className="input min-h-[110px] w-full resize-y text-sm"
+              value={aiContent}
+              onChange={(e) => setAiContent(e.target.value)}
+              placeholder={"Contenido del correo, con las variables donde van. Ej:\n\nBuenas tardes {{nombre}}, este correo es una invitación a la entrevista del {{fecha}} a las {{hora}}. Confirmá tu asistencia con el botón."}
+              disabled={generating}
+            />
+            {aiError && <p className="text-xs text-error">{aiError}</p>}
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-text-muted">
+                Solo se comparte el contenido del correo. Nunca contactos.
+              </span>
+              <button
+                type="button"
+                onClick={() => void handleGenerate()}
+                disabled={generating || !aiContent.trim()}
+                className="btn-primary flex items-center gap-2 text-sm disabled:opacity-50"
+              >
+                <Sparkles size={14} />
+                {generating ? "Generando..." : html ? "Regenerar" : "Generar HTML"}
+              </button>
+            </div>
+          </article>
+
           <article className="card space-y-3">
             <div className="flex items-center justify-between">
               <label className="text-sm font-semibold">HTML de la plantilla</label>

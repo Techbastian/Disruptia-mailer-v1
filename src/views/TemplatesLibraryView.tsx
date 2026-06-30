@@ -1,17 +1,20 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, Clock, FilePlus, FolderKanban, Pencil, RefreshCw, X } from "lucide-react";
-import type { EmailTemplate, Project } from "../types";
+import { AlertTriangle, Clock, FilePlus, FolderKanban, Pencil, RefreshCw, Sparkles, X } from "lucide-react";
+import type { AssetItem, EmailTemplate, Project } from "../types";
 import { sanitizeHtml } from "../lib/sanitizeHtml";
+import { generateTemplateHtml, pickBaseTemplate } from "../lib/ai";
 
 type TemplatesLibraryViewProps = {
   templates: EmailTemplate[];
   projects: Project[];
+  assets: AssetItem[];
   loading: boolean;
   error: string | null;
   onRetry: () => void;
   onEdit: (id: string) => void;
   onNew: () => void;
   onAssignProject: (templateId: string, projectId: string | null) => Promise<EmailTemplate>;
+  onAiDraftReady: (draft: { html: string; projectId: string | null }) => void;
 };
 
 // "all" = todas | "general" = solo agnosticas | <id> = proyecto (incluye General)
@@ -259,19 +262,189 @@ function ProjectFilterBar({
   );
 }
 
+// ── Crear con IA ──────────────────────────────────────────────────────────────
+
+function CreateWithAiModal({
+  templates,
+  projects,
+  assets,
+  onReady,
+  onClose
+}: {
+  templates: EmailTemplate[];
+  projects: Project[];
+  assets: AssetItem[];
+  onReady: (draft: { html: string; projectId: string | null }) => void;
+  onClose: () => void;
+}) {
+  const [baseProjectId, setBaseProjectId] = useState<string | null>(null);
+  const [saveProjectId, setSaveProjectId] = useState<string | null>(null);
+  const [bannerAssetId, setBannerAssetId] = useState<string>("");
+  const [content, setContent] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState("");
+
+  const imageAssets = useMemo(() => assets.filter((a) => a.kind === "image"), [assets]);
+  const baseTemplate = useMemo(
+    () => pickBaseTemplate(templates, baseProjectId),
+    [templates, baseProjectId]
+  );
+
+  async function handleGenerate() {
+    if (!content.trim()) {
+      setError("Escribí el contenido del correo para generar la plantilla.");
+      return;
+    }
+    setError("");
+    setGenerating(true);
+    try {
+      const bannerImageUrl = imageAssets.find((a) => a.id === bannerAssetId)?.publicUrl ?? null;
+      const html = await generateTemplateHtml({
+        content,
+        variables: [],
+        baseProjectId,
+        referenceTemplate: baseTemplate,
+        bannerImageUrl
+      });
+      onReady({ html, projectId: saveProjectId });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No fue posible generar la plantilla.");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div
+        className="max-h-[90vh] w-full max-w-lg overflow-auto rounded-2xl bg-background p-6 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center gap-2">
+          <Sparkles size={18} className="text-primary" />
+          <h2 className="font-heading text-lg font-bold">Crear plantilla con IA</h2>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-sm font-semibold">Basar estilo en</label>
+            <select
+              className="input mt-1.5"
+              value={baseProjectId ?? ""}
+              onChange={(e) => {
+                const v = e.target.value || null;
+                setBaseProjectId(v);
+                setSaveProjectId(v);
+              }}
+              disabled={generating}
+            >
+              <option value="">General (marca Disruptia)</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-semibold">Guardar en proyecto</label>
+            <select
+              className="input mt-1.5"
+              value={saveProjectId ?? ""}
+              onChange={(e) => setSaveProjectId(e.target.value || null)}
+              disabled={generating}
+            >
+              <option value="">General</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <p className="mt-1 text-xs text-text-muted">
+          {baseTemplate
+            ? `Clonará la estructura e identidad de "${baseTemplate.name}" (la más reciente del proyecto).`
+            : "Base General: usará los lineamientos de marca Disruptia."}
+        </p>
+
+        <label className="mt-4 block text-sm font-semibold">Banner superior</label>
+        <select
+          className="input mt-1.5"
+          value={bannerAssetId}
+          onChange={(e) => setBannerAssetId(e.target.value)}
+          disabled={generating}
+        >
+          <option value="">
+            {baseProjectId ? "Sin banner (conservar el del molde)" : "Sin banner (franja morada + texto)"}
+          </option>
+          {imageAssets.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+            </option>
+          ))}
+        </select>
+        <p className="mt-1 text-xs text-text-muted">
+          {baseProjectId
+            ? "Imagen de la Biblioteca de Activos para el banner superior."
+            : "Para General: elegí el logo de la Biblioteca; irá sobre una franja morada."}
+        </p>
+
+        <label className="mt-4 block text-sm font-semibold">Contenido del correo</label>
+        <textarea
+          className="input mt-1.5 min-h-[130px] w-full resize-y text-sm"
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          placeholder={"Escribí el texto real del correo, con las variables donde van. Ej:\n\nBuenas tardes {{nombre}},\n\nEste correo es una invitación a la jornada del {{fecha}} en {{lugar}}. Confirmá tu asistencia con el botón."}
+          disabled={generating}
+          autoFocus
+        />
+
+        {error && <p className="mt-2 text-sm text-error">{error}</p>}
+        <p className="mt-2 text-[11px] text-text-muted">
+          Solo se comparte el contenido del correo. Nunca contactos ni listas. Las variables se declaran luego en el editor.
+        </p>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-border px-4 py-2 text-sm font-semibold hover:bg-surface"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleGenerate()}
+            disabled={generating || !content.trim()}
+            className="btn-primary flex items-center gap-2 text-sm disabled:opacity-50"
+          >
+            <Sparkles size={14} />
+            {generating ? "Generando..." : "Generar y abrir editor"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 export default function TemplatesLibraryView({
   templates,
   projects,
+  assets,
   loading,
   error,
   onRetry,
   onEdit,
   onNew,
-  onAssignProject
+  onAssignProject,
+  onAiDraftReady
 }: TemplatesLibraryViewProps) {
   const [activeTemplate, setActiveTemplate] = useState<EmailTemplate | null>(null);
+  const [creatingWithAi, setCreatingWithAi] = useState(false);
   const [filter, setFilter] = useState<ProjectFilter>("all");
 
   const GENERAL_KEY = "__general__";
@@ -422,13 +595,36 @@ export default function TemplatesLibraryView({
             Hacé clic en una plantilla para verla o editarla.
           </p>
         </div>
-        <button type="button" onClick={onNew} className="btn-primary flex items-center gap-2 whitespace-nowrap">
-          <FilePlus size={16} />
-          Nueva plantilla
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setCreatingWithAi(true)}
+            className="btn-secondary flex items-center gap-2 whitespace-nowrap"
+          >
+            <Sparkles size={16} />
+            Crear con IA
+          </button>
+          <button type="button" onClick={onNew} className="btn-primary flex items-center gap-2 whitespace-nowrap">
+            <FilePlus size={16} />
+            Nueva plantilla
+          </button>
+        </div>
       </div>
 
       {renderBody()}
+
+      {creatingWithAi && (
+        <CreateWithAiModal
+          templates={templates}
+          projects={projects}
+          assets={assets}
+          onReady={(draft) => {
+            setCreatingWithAi(false);
+            onAiDraftReady(draft);
+          }}
+          onClose={() => setCreatingWithAi(false)}
+        />
+      )}
 
       {activeTemplate && (
         <TemplateModal

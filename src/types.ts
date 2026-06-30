@@ -1,4 +1,12 @@
-export type AppView = "dashboard" | "campaign" | "assets" | "templates" | "template-editor";
+export type AppView =
+  | "dashboard"
+  | "campaign"
+  | "assets"
+  | "templates"
+  | "template-editor"
+  | "whatsapp-templates"
+  | "whatsapp-template-editor"
+  | "whatsapp-send";
 
 export type ContactRecord = {
   email: string;
@@ -44,6 +52,29 @@ export type EmailTemplate = {
   variablesCsv: string[];
   variablesCampaign: string[];
   projectId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WhatsAppButtonType = "QUICK_REPLY" | "URL" | "PHONE_NUMBER";
+
+export type WhatsAppButton = {
+  type: WhatsAppButtonType;
+  text: string;
+  value?: string; // URL o teléfono según el tipo
+};
+
+export type WhatsAppCategory = "MARKETING" | "UTILITY" | "AUTHENTICATION";
+
+export type WhatsAppTemplate = {
+  id: string;
+  name: string; // nombre exacto aprobado en YCloud/Meta
+  language: string; // ej. es, es_AR, en
+  category: WhatsAppCategory;
+  headerText: string; // encabezado estático ("" si no tiene)
+  bodyText: string; // cuerpo con variables {{1}} {{2}}
+  footerText: string;
+  buttons: WhatsAppButton[];
   createdAt: string;
   updatedAt: string;
 };

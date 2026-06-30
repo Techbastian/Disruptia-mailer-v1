@@ -71,20 +71,20 @@ function processRows(rows: Record<string, unknown>[]): Omit<ParseResult, "column
   };
 }
 
-function extractColumnNames(rows: Record<string, unknown>[]): string[] {
+export function extractColumnNames(rows: Record<string, unknown>[]): string[] {
   if (rows.length === 0) return [];
   return Object.keys(rows[0]).map((k) => k.trim().toLowerCase());
 }
 
-export async function parseContactsFile(file: File): Promise<ParseResult> {
+/** Lee filas de un .csv o .xlsx como objetos planos (clave = encabezado). */
+export async function readFileRows(file: File): Promise<Record<string, unknown>[]> {
   const extension = file.name.split(".").pop()?.toLowerCase();
 
   if (extension === "xlsx") {
     const buffer = await file.arrayBuffer();
     const workbook = XLSX.read(buffer, { type: "array" });
     const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet);
-    return { ...processRows(rows), columnNames: extractColumnNames(rows) };
+    return XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet);
   }
 
   const text = await file.text();
@@ -93,5 +93,10 @@ export async function parseContactsFile(file: File): Promise<ParseResult> {
     skipEmptyLines: true,
     transformHeader: (header) => header.trim()
   });
-  return { ...processRows(parsed.data), columnNames: extractColumnNames(parsed.data) };
+  return parsed.data;
+}
+
+export async function parseContactsFile(file: File): Promise<ParseResult> {
+  const rows = await readFileRows(file);
+  return { ...processRows(rows), columnNames: extractColumnNames(rows) };
 }

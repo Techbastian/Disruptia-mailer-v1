@@ -1,4 +1,4 @@
-import type { AssetItem, CampaignHistoryItem, EmailTemplate, Project } from "../types";
+import type { AssetItem, CampaignHistoryItem, EmailTemplate, Project, WhatsAppTemplate } from "../types";
 import { DEFAULT_ACTOR_ID, supabase, SUPABASE_BUCKET_ASSETS } from "./supabase";
 
 type CreateCampaignInput = {
@@ -227,6 +227,79 @@ export async function deleteProject(id: string): Promise<void> {
   const client = ensureSupabase();
   // Las plantillas asociadas pasan a General por ON DELETE SET NULL.
   const { error } = await client.from("projects").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ── WhatsApp templates ─────────────────────────────────────────────────────────
+
+const WA_TEMPLATE_SELECT =
+  "id,name,language,category,header_text,body_text,footer_text,buttons,created_at,updated_at";
+
+function rowToWhatsAppTemplate(row: Record<string, unknown>): WhatsAppTemplate {
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    language: (row.language as string) ?? "es",
+    category: (row.category as WhatsAppTemplate["category"]) ?? "MARKETING",
+    headerText: (row.header_text as string) ?? "",
+    bodyText: (row.body_text as string) ?? "",
+    footerText: (row.footer_text as string) ?? "",
+    buttons: (row.buttons as WhatsAppTemplate["buttons"]) ?? [],
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string
+  };
+}
+
+export async function listWhatsAppTemplates(): Promise<WhatsAppTemplate[]> {
+  const client = ensureSupabase();
+  const { data, error } = await client
+    .from("whatsapp_templates")
+    .select(WA_TEMPLATE_SELECT)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map(rowToWhatsAppTemplate);
+}
+
+export type SaveWhatsAppTemplateInput = Omit<WhatsAppTemplate, "id" | "createdAt" | "updatedAt"> & {
+  id?: string;
+};
+
+export async function saveWhatsAppTemplate(input: SaveWhatsAppTemplateInput): Promise<WhatsAppTemplate> {
+  const client = ensureSupabase();
+  const payload = {
+    name: input.name,
+    language: input.language,
+    category: input.category,
+    header_text: input.headerText,
+    body_text: input.bodyText,
+    footer_text: input.footerText,
+    buttons: input.buttons,
+    updated_at: new Date().toISOString()
+  };
+
+  if (input.id) {
+    const { data, error } = await client
+      .from("whatsapp_templates")
+      .update(payload)
+      .eq("id", input.id)
+      .select(WA_TEMPLATE_SELECT)
+      .single();
+    if (error) throw error;
+    return rowToWhatsAppTemplate(data);
+  }
+
+  const { data, error } = await client
+    .from("whatsapp_templates")
+    .insert({ ...payload, created_by: DEFAULT_ACTOR_ID })
+    .select(WA_TEMPLATE_SELECT)
+    .single();
+  if (error) throw error;
+  return rowToWhatsAppTemplate(data);
+}
+
+export async function deleteWhatsAppTemplate(id: string): Promise<void> {
+  const client = ensureSupabase();
+  const { error } = await client.from("whatsapp_templates").delete().eq("id", id);
   if (error) throw error;
 }
 

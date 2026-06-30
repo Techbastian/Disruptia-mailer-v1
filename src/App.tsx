@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import Layout from "./components/Layout";
-import { createProject, deleteAsset, deleteCampaign, listAssets, listCampaigns, listProjects, listTemplates, saveTemplate, setTemplateProject } from "./lib/db";
+import { createProject, deleteAsset, deleteCampaign, listAssets, listCampaigns, listProjects, listTemplates, listWhatsAppTemplates, saveTemplate, setTemplateProject } from "./lib/db";
 import { BASE_TEMPLATES } from "./data/baseTemplates";
 import TemplatesLibraryView from "./views/TemplatesLibraryView";
 import TemplateEditorView from "./views/TemplateEditorView";
+import WhatsAppTemplatesView from "./views/WhatsAppTemplatesView";
+import WhatsAppTemplateEditorView from "./views/WhatsAppTemplateEditorView";
+import WhatsAppSendView from "./views/WhatsAppSendView";
 import { hasSupabaseConfig } from "./lib/supabase";
 import { useMailerStore } from "./store/useMailerStore";
 import DashboardView from "./views/DashboardView";
@@ -32,12 +35,23 @@ export default function App() {
     removeTemplate,
     setProjects,
     addProject,
-    setSelectedTemplateId
+    setSelectedTemplateId,
+    whatsappTemplates,
+    selectedWhatsAppTemplateId,
+    setWhatsappTemplates,
+    addWhatsappTemplate,
+    updateWhatsappTemplate,
+    removeWhatsappTemplate,
+    setSelectedWhatsAppTemplateId
   } = useMailerStore();
 
   const [templateError, setTemplateError] = useState<string | null>(null);
   const [templateLoading, setTemplateLoading] = useState(true);
   const [templateRetry, setTemplateRetry] = useState(0);
+  const [aiDraft, setAiDraft] = useState<{ html: string; projectId: string | null } | null>(null);
+  const [waError, setWaError] = useState<string | null>(null);
+  const [waLoading, setWaLoading] = useState(true);
+  const [waRetry, setWaRetry] = useState(0);
 
   useEffect(() => {
     async function syncCampaignsAndAssets() {
@@ -116,6 +130,28 @@ export default function App() {
     void loadTemplates();
   }, [setTemplates, templateRetry]);
 
+  useEffect(() => {
+    async function loadWhatsappTemplates() {
+      if (!hasSupabaseConfig) {
+        setWaError("Supabase no está configurado. Revisá las variables de entorno (.env).");
+        setWaLoading(false);
+        return;
+      }
+      setWaError(null);
+      setWaLoading(true);
+      try {
+        setWhatsappTemplates(await listWhatsAppTemplates());
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "Error desconocido al cargar plantillas de WhatsApp.";
+        console.error("Error cargando plantillas WhatsApp:", error);
+        setWaError(msg);
+      } finally {
+        setWaLoading(false);
+      }
+    }
+    void loadWhatsappTemplates();
+  }, [setWhatsappTemplates, waRetry]);
+
   return (
     <Layout view={currentView} onChangeView={setCurrentView}>
       {currentView === "dashboard" && (
@@ -152,15 +188,23 @@ export default function App() {
         <TemplatesLibraryView
           templates={templates}
           projects={projects}
+          assets={assets}
           loading={templateLoading}
           error={templateError}
           onRetry={() => setTemplateRetry((n) => n + 1)}
           onAssignProject={handleAssignProject}
+          onAiDraftReady={(draft) => {
+            setAiDraft(draft);
+            setSelectedTemplateId(null);
+            setCurrentView("template-editor");
+          }}
           onEdit={(id) => {
+            setAiDraft(null);
             setSelectedTemplateId(id);
             setCurrentView("template-editor");
           }}
           onNew={() => {
+            setAiDraft(null);
             setSelectedTemplateId(null);
             setCurrentView("template-editor");
           }}
@@ -168,9 +212,12 @@ export default function App() {
       )}
       {currentView === "template-editor" && (
         <TemplateEditorView
-          key={selectedTemplateId ?? "new"}
+          key={selectedTemplateId ?? (aiDraft ? "ai-draft" : "new")}
           initialTemplate={templates.find((t) => t.id === selectedTemplateId) ?? null}
+          templates={templates}
           projects={projects}
+          assets={assets}
+          initialDraft={selectedTemplateId ? null : aiDraft}
           onCreateProject={handleCreateProject}
           onSaved={(template) => {
             if (selectedTemplateId) {
@@ -178,15 +225,63 @@ export default function App() {
             } else {
               addTemplate(template);
             }
+            setAiDraft(null);
             setSelectedTemplateId(template.id);
             setCurrentView("templates");
           }}
           onDeleted={() => {
             if (selectedTemplateId) removeTemplate(selectedTemplateId);
+            setAiDraft(null);
             setSelectedTemplateId(null);
             setCurrentView("templates");
           }}
-          onCancel={() => setCurrentView("templates")}
+          onCancel={() => {
+            setAiDraft(null);
+            setCurrentView("templates");
+          }}
+        />
+      )}
+      {currentView === "whatsapp-templates" && (
+        <WhatsAppTemplatesView
+          templates={whatsappTemplates}
+          loading={waLoading}
+          error={waError}
+          onRetry={() => setWaRetry((n) => n + 1)}
+          onEdit={(id) => {
+            setSelectedWhatsAppTemplateId(id);
+            setCurrentView("whatsapp-template-editor");
+          }}
+          onNew={() => {
+            setSelectedWhatsAppTemplateId(null);
+            setCurrentView("whatsapp-template-editor");
+          }}
+        />
+      )}
+      {currentView === "whatsapp-template-editor" && (
+        <WhatsAppTemplateEditorView
+          key={selectedWhatsAppTemplateId ?? "new"}
+          initialTemplate={whatsappTemplates.find((t) => t.id === selectedWhatsAppTemplateId) ?? null}
+          onSaved={(template) => {
+            if (selectedWhatsAppTemplateId) {
+              updateWhatsappTemplate(template);
+            } else {
+              addWhatsappTemplate(template);
+            }
+            setSelectedWhatsAppTemplateId(template.id);
+            setCurrentView("whatsapp-templates");
+          }}
+          onDeleted={() => {
+            if (selectedWhatsAppTemplateId) removeWhatsappTemplate(selectedWhatsAppTemplateId);
+            setSelectedWhatsAppTemplateId(null);
+            setCurrentView("whatsapp-templates");
+          }}
+          onCancel={() => setCurrentView("whatsapp-templates")}
+        />
+      )}
+      {currentView === "whatsapp-send" && (
+        <WhatsAppSendView
+          templates={whatsappTemplates}
+          onManageTemplates={() => setCurrentView("whatsapp-templates")}
         />
       )}
     </Layout>
