@@ -39,10 +39,10 @@ src/
 ```
 
 **Data flow for campaign creation:**
-1. `csv.ts` parses uploaded file → validates emails, deduplicates, enforces 1000 daily limit
+1. `csv.ts` parses uploaded file → validates emails, deduplicates (full list kept, no cut)
 2. User writes a prompt → `api.ts` POSTs to N8N webhook with prompt + contacts
 3. N8N returns HTML → `sanitizeHtml.ts` strips XSS vectors → sandboxed `<iframe>` preview
-4. "Aprobar" saves campaign via `db.ts` with `status="queued"`
+4. "Aprobar" saves campaign (`status="queued"`) + full recipient list in `campaign_recipients`, then dispatches the first batch up to the **global 1200/day quota** (`lib/dispatch.ts`, counted across all campaigns); the excess stays `pending` and is sent from the Dashboard via "Enviar lote"
 
 ## Key Technical Decisions
 

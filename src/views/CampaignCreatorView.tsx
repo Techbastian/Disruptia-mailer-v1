@@ -4,7 +4,16 @@ import FileDropzone from "../components/FileDropzone";
 import StatCard from "../components/StatCard";
 import { parseContactsFile, type InvalidRow } from "../lib/csv";
 import { sendCampaign, sendTestEmail } from "../lib/api";
-import { createCampaign, createCampaignRun, updateCampaignStatus } from "../lib/db";
+import {
+  addCampaignRecipients,
+  createCampaign,
+  createCampaignRun,
+  fetchPendingRecipients,
+  markRecipientsDispatched,
+  setCampaignPendingCount,
+  updateCampaignStatus
+} from "../lib/db";
+import { DAILY_EMAIL_LIMIT, getRemainingDailyQuota } from "../lib/dispatch";
 import { sanitizeHtml } from "../lib/sanitizeHtml";
 import type { CampaignHistoryItem, CampaignMetrics, ContactRecord, EmailTemplate } from "../types";
 
@@ -85,7 +94,7 @@ function Step1({
   onNext: () => void;
 }) {
   const hasContacts = contacts.length > 0;
-  const overLimit = contacts.length > 1000;
+  const overLimit = contacts.length > DAILY_EMAIL_LIMIT;
 
   return (
     <div className="space-y-6">
@@ -123,9 +132,13 @@ function Step1({
             <div className="flex items-start gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4">
               <AlertTriangle size={16} className="mt-0.5 shrink-0 text-yellow-600" />
               <div className="text-sm text-yellow-800">
-                <p className="font-semibold">Límite diario: solo se enviarán los primeros 1.000 contactos</p>
+                <p className="font-semibold">
+                  Más de {DAILY_EMAIL_LIMIT} contactos: el envío saldrá en lotes diarios
+                </p>
                 <p className="mt-1 text-xs text-yellow-700">
-                  Tenés {contacts.length} contactos válidos. El resto deberá enviarse en otra campaña.
+                  Tenés {contacts.length} contactos válidos. Hoy sale el primer lote (según el cupo global de{" "}
+                  {DAILY_EMAIL_LIMIT}/día entre todas las campañas) y el resto queda pendiente para despachar desde el
+                  Dashboard con "Enviar lote".
                 </p>
               </div>
             </div>
@@ -383,7 +396,7 @@ function Step4({
     [template.html, campaignVars]
   );
 
-  const recipientCount = Math.min(contacts.length, 1000);
+  const recipientCount = contacts.length;
   const testEmails = [DEFAULT_TEST_EMAIL, ...extraTestEmails];
 
   function handleAddTestEmail() {
@@ -441,8 +454,8 @@ function Step4({
         <div className="card py-4 text-center">
           <p className="text-sm text-text-muted">Destinatarios</p>
           <p className="mt-1 text-2xl font-bold text-primary">{recipientCount}</p>
-          {contacts.length > 1000 && (
-            <p className="mt-1 text-xs text-text-muted">de {contacts.length} válidos</p>
+          {contacts.length > DAILY_EMAIL_LIMIT && (
+            <p className="mt-1 text-xs text-text-muted">en lotes de hasta {DAILY_EMAIL_LIMIT}/día</p>
           )}
         </div>
         <div className="card py-4 text-center">
@@ -598,27 +611,52 @@ export default function CampaignCreatorView({ templates, initialTemplateId, onCa
     setSending(true);
     try {
       const finalHtml = sanitizeHtml(substituteVars(selectedTemplate.html, campaignVars));
-      const recipientBatch = contacts.slice(0, 1000);
+
+      // Cupo diario GLOBAL (todas las campañas): el primer lote sale hasta
+      // agotarlo; el resto queda pendiente para "Enviar lote" en el Dashboard.
+      const quota = await getRemainingDailyQuota();
+      const firstBatchSize = Math.min(contacts.length, quota);
+
       const campaign = await createCampaign({
         title,
         subject,
         prompt: "",
         htmlRaw: selectedTemplate.html,
         htmlSanitized: finalHtml,
-        recipientCountEstimate: recipientBatch.length,
+        recipientCountEstimate: contacts.length,
+        pendingCount: contacts.length,
         validationMetrics: metrics
       });
       await createCampaignRun(campaign.id);
+      await addCampaignRecipients(campaign.id, contacts);
+
+      if (firstBatchSize === 0) {
+        // Sin cupo hoy: la campaña queda con todo pendiente, se despacha desde el Dashboard.
+        onCampaignCreated({ ...campaign, pendingCount: contacts.length });
+        return;
+      }
+
+      const batch = await fetchPendingRecipients(campaign.id, firstBatchSize);
       try {
-        await sendCampaign({ campaignId: campaign.id, html: finalHtml, subject, contacts: recipientBatch });
+        await sendCampaign({
+          campaignId: campaign.id,
+          html: finalHtml,
+          subject,
+          contacts: batch.map((r) => r.contact)
+        });
       } catch (err) {
         // La campaña ya existe en Supabase: marcarla fallida evita zombies
-        // "en cola" y duplicados si el usuario reintenta.
+        // "en cola" y duplicados si el usuario reintenta. Los destinatarios
+        // quedan pending para reintentar desde el Dashboard.
         await updateCampaignStatus(campaign.id, "failed").catch(() => undefined);
         const detail = err instanceof Error ? err.message : String(err);
         throw new Error(`El envío falló y la campaña quedó marcada como fallida. Detalle: ${detail}`);
       }
-      onCampaignCreated(campaign);
+      await markRecipientsDispatched(batch.map((r) => r.id));
+      const remainingPending = contacts.length - batch.length;
+      await setCampaignPendingCount(campaign.id, remainingPending);
+
+      onCampaignCreated({ ...campaign, pendingCount: remainingPending });
     } finally {
       setSending(false);
     }

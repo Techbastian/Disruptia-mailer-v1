@@ -35,6 +35,8 @@ export type CampaignHistoryItem = {
   title: string;
   createdAt: string;
   recipients: number;
+  // Destinatarios aún no despachados a N8N (batching por cupo diario).
+  pendingCount: number;
   status: "draft" | "queued" | "sent" | "failed";
   validationMetrics: CampaignMetrics | null;
 };

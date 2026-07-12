@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import Layout from "./components/Layout";
 import { createProject, deleteAsset, deleteCampaign, deleteWhatsAppCampaign, listAssets, listCampaigns, listProjects, listTemplates, listWhatsAppCampaigns, listWhatsAppTemplates, saveTemplate, setTemplateProject } from "./lib/db";
+import { dispatchNextBatch } from "./lib/dispatch";
 import { BASE_TEMPLATES } from "./data/baseTemplates";
 import TemplatesLibraryView from "./views/TemplatesLibraryView";
 import TemplateEditorView from "./views/TemplateEditorView";
@@ -174,6 +175,14 @@ export default function App() {
           onDeleteWhatsAppCampaign={async (id) => {
             await deleteWhatsAppCampaign(id);
             removeWhatsappCampaign(id);
+          }}
+          onDispatchBatch={async (id) => {
+            try {
+              return await dispatchNextBatch(id);
+            } finally {
+              // Refresca estados/pendientes aunque el lote haya fallado.
+              setCampaigns(await listCampaigns());
+            }
           }}
           onRefresh={async () => {
             setCampaigns(await listCampaigns());

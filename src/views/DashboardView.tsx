@@ -1,12 +1,14 @@
 import { useState } from "react";
-import { RefreshCw, Trash2 } from "lucide-react";
+import { RefreshCw, Send, Trash2 } from "lucide-react";
 import type { CampaignHistoryItem, WhatsAppCampaignItem } from "../types";
+import type { DispatchResult } from "../lib/dispatch";
 
 type DashboardViewProps = {
   campaigns: CampaignHistoryItem[];
   whatsappCampaigns: WhatsAppCampaignItem[];
   onDeleteCampaign: (id: string) => Promise<void>;
   onDeleteWhatsAppCampaign: (id: string) => Promise<void>;
+  onDispatchBatch: (id: string) => Promise<DispatchResult>;
   onRefresh: () => Promise<void>;
 };
 
@@ -61,11 +63,33 @@ export default function DashboardView({
   whatsappCampaigns,
   onDeleteCampaign,
   onDeleteWhatsAppCampaign,
+  onDispatchBatch,
   onRefresh
 }: DashboardViewProps) {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [dispatchingId, setDispatchingId] = useState<string | null>(null);
+  const [batchMsg, setBatchMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function handleDispatchBatch(id: string) {
+    setDispatchingId(id);
+    setBatchMsg(null);
+    try {
+      const result = await onDispatchBatch(id);
+      setBatchMsg({
+        ok: true,
+        text:
+          result.remainingPending > 0
+            ? `Lote de ${result.dispatched} despachado. Quedan ${result.remainingPending} pendientes (cupo diario).`
+            : `Lote de ${result.dispatched} despachado. La campaña quedó completa.`
+      });
+    } catch (err) {
+      setBatchMsg({ ok: false, text: err instanceof Error ? err.message : "No fue posible despachar el lote." });
+    } finally {
+      setDispatchingId(null);
+    }
+  }
 
   // Los ids son UUID, no colisionan entre tablas: confirmId/deletingId se comparten.
   async function handleDelete(id: string, channel: "email" | "whatsapp") {
@@ -139,6 +163,7 @@ export default function DashboardView({
                 <th className="px-6 py-3">Título</th>
                 <th className="px-6 py-3">Fecha</th>
                 <th className="px-6 py-3">Destinatarios</th>
+                <th className="px-6 py-3">Pendientes</th>
                 <th className="px-6 py-3">Calidad de datos</th>
                 <th className="px-6 py-3">Estado</th>
                 <th className="px-6 py-3" />
@@ -147,7 +172,7 @@ export default function DashboardView({
             <tbody>
               {campaigns.length === 0 ? (
                 <tr>
-                  <td className="px-6 py-8 text-text-muted" colSpan={6}>
+                  <td className="px-6 py-8 text-text-muted" colSpan={7}>
                     Aún no hay campañas registradas.
                   </td>
                 </tr>
@@ -159,6 +184,30 @@ export default function DashboardView({
                       {new Date(campaign.createdAt).toLocaleString("es-CO")}
                     </td>
                     <td className="px-6 py-4">{campaign.recipients}</td>
+                    <td className="px-6 py-4">
+                      {campaign.pendingCount > 0 ? (
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-full bg-warning/15 px-2.5 py-0.5 text-xs font-semibold text-yellow-700">
+                            {campaign.pendingCount}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void handleDispatchBatch(campaign.id)}
+                            disabled={dispatchingId !== null}
+                            className="flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-50"
+                          >
+                            <Send size={12} />
+                            {dispatchingId === campaign.id
+                              ? "Enviando…"
+                              : campaign.status === "failed"
+                                ? "Reintentar"
+                                : "Enviar lote"}
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-text-muted">—</span>
+                      )}
+                    </td>
                     <td className="px-6 py-4">
                       <QualityCell metrics={campaign.validationMetrics} />
                     </td>
@@ -201,6 +250,11 @@ export default function DashboardView({
             </tbody>
           </table>
         </div>
+        {batchMsg && (
+          <p className={`border-t border-border px-6 py-3 text-sm ${batchMsg.ok ? "text-success" : "text-error"}`}>
+            {batchMsg.text}
+          </p>
+        )}
       </article>
 
       <article className="card overflow-hidden p-0">

@@ -2,6 +2,7 @@ import type {
   AssetItem,
   CampaignHistoryItem,
   CampaignMetrics,
+  ContactRecord,
   EmailTemplate,
   Project,
   WhatsAppCampaignItem,
@@ -16,6 +17,7 @@ type CreateCampaignInput = {
   htmlRaw: string;
   htmlSanitized: string;
   recipientCountEstimate: number;
+  pendingCount: number;
   validationMetrics: CampaignMetrics | null;
 };
 
@@ -26,7 +28,7 @@ function ensureSupabase() {
   return supabase;
 }
 
-const CAMPAIGN_SELECT = "id,title,status,recipient_count_estimate,validation_metrics,created_at";
+const CAMPAIGN_SELECT = "id,title,status,recipient_count_estimate,pending_count,validation_metrics,created_at";
 
 function rowToCampaign(row: Record<string, unknown>): CampaignHistoryItem {
   return {
@@ -34,6 +36,7 @@ function rowToCampaign(row: Record<string, unknown>): CampaignHistoryItem {
     title: row.title as string,
     status: row.status as CampaignHistoryItem["status"],
     recipients: (row.recipient_count_estimate as number) ?? 0,
+    pendingCount: (row.pending_count as number) ?? 0,
     validationMetrics: (row.validation_metrics as CampaignHistoryItem["validationMetrics"]) ?? null,
     createdAt: row.created_at as string
   };
@@ -63,6 +66,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Campai
       html_raw: input.htmlRaw || null,
       html_sanitized: input.htmlSanitized || null,
       recipient_count_estimate: input.recipientCountEstimate,
+      pending_count: input.pendingCount,
       validation_metrics: input.validationMetrics,
       created_by: DEFAULT_ACTOR_ID
     })
@@ -80,6 +84,104 @@ export async function updateCampaignStatus(
   const client = ensureSupabase();
   const { error } = await client.from("campaigns").update({ status }).eq("id", id);
   if (error) throw error;
+}
+
+// ── Campaign recipients (persistencia + batching por cupo diario) ─────────────
+
+const RECIPIENT_INSERT_CHUNK = 500;
+const RECIPIENT_UPDATE_CHUNK = 200;
+
+export async function addCampaignRecipients(campaignId: string, contacts: ContactRecord[]): Promise<void> {
+  const client = ensureSupabase();
+  for (let i = 0; i < contacts.length; i += RECIPIENT_INSERT_CHUNK) {
+    const chunk = contacts.slice(i, i + RECIPIENT_INSERT_CHUNK).map((contact) => ({
+      campaign_id: campaignId,
+      email: contact.email,
+      data: contact,
+      status: "pending"
+    }));
+    const { error } = await client.from("campaign_recipients").insert(chunk);
+    if (error) throw error;
+  }
+}
+
+export type PendingRecipient = {
+  id: string;
+  contact: ContactRecord;
+};
+
+export async function fetchPendingRecipients(campaignId: string, limit: number): Promise<PendingRecipient[]> {
+  const client = ensureSupabase();
+  const { data, error } = await client
+    .from("campaign_recipients")
+    .select("id,email,data")
+    .eq("campaign_id", campaignId)
+    .eq("status", "pending")
+    .order("created_at", { ascending: true })
+    .limit(limit);
+  if (error) throw error;
+  return (data ?? []).map((row) => ({
+    id: row.id as string,
+    contact: { ...(row.data as ContactRecord), email: row.email as string }
+  }));
+}
+
+export async function markRecipientsDispatched(ids: string[]): Promise<void> {
+  const client = ensureSupabase();
+  const sentAt = new Date().toISOString();
+  for (let i = 0; i < ids.length; i += RECIPIENT_UPDATE_CHUNK) {
+    const chunk = ids.slice(i, i + RECIPIENT_UPDATE_CHUNK);
+    const { error } = await client
+      .from("campaign_recipients")
+      .update({ status: "sent", sent_at: sentAt })
+      .in("id", chunk);
+    if (error) throw error;
+  }
+}
+
+export async function setCampaignPendingCount(id: string, pendingCount: number): Promise<void> {
+  const client = ensureSupabase();
+  const { error } = await client.from("campaigns").update({ pending_count: pendingCount }).eq("id", id);
+  if (error) throw error;
+}
+
+/** Despachados hoy (hora local) entre TODAS las campañas — para el cupo global diario. */
+export async function countDispatchedToday(): Promise<number> {
+  const client = ensureSupabase();
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const { count, error } = await client
+    .from("campaign_recipients")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "sent")
+    .gte("sent_at", startOfDay.toISOString());
+  if (error) throw error;
+  return count ?? 0;
+}
+
+export type CampaignDispatchData = {
+  id: string;
+  title: string;
+  subject: string;
+  htmlSanitized: string;
+  pendingCount: number;
+};
+
+export async function getCampaignDispatchData(id: string): Promise<CampaignDispatchData> {
+  const client = ensureSupabase();
+  const { data, error } = await client
+    .from("campaigns")
+    .select("id,title,subject,html_sanitized,pending_count")
+    .eq("id", id)
+    .single();
+  if (error) throw error;
+  return {
+    id: data.id as string,
+    title: data.title as string,
+    subject: (data.subject as string) ?? "",
+    htmlSanitized: (data.html_sanitized as string) ?? "",
+    pendingCount: (data.pending_count as number) ?? 0
+  };
 }
 
 export async function createCampaignRun(campaignId: string): Promise<void> {
