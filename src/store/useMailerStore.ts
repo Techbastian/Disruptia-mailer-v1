@@ -1,12 +1,8 @@
 import { create } from "zustand";
-import type { AppView, AssetItem, CampaignHistoryItem, CampaignMetrics, ContactRecord, EmailTemplate, Project, WhatsAppTemplate } from "../types";
+import type { AppView, AssetItem, CampaignHistoryItem, EmailTemplate, Project, WhatsAppTemplate } from "../types";
 
 type MailerState = {
   currentView: AppView;
-  contacts: ContactRecord[];
-  metrics: CampaignMetrics;
-  prompt: string;
-  generatedHtml: string;
   assets: AssetItem[];
   campaigns: CampaignHistoryItem[];
   templates: EmailTemplate[];
@@ -15,9 +11,6 @@ type MailerState = {
   selectedTemplateId: string | null;
   selectedWhatsAppTemplateId: string | null;
   setCurrentView: (view: AppView) => void;
-  setContacts: (contacts: ContactRecord[], metrics: CampaignMetrics) => void;
-  setPrompt: (prompt: string) => void;
-  setGeneratedHtml: (html: string) => void;
   addAsset: (asset: AssetItem) => void;
   removeAsset: (id: string) => void;
   addCampaign: (campaign: CampaignHistoryItem) => void;
@@ -39,19 +32,8 @@ type MailerState = {
   setSelectedWhatsAppTemplateId: (id: string | null) => void;
 };
 
-const initialMetrics: CampaignMetrics = {
-  totalLoaded: 0,
-  validEmails: 0,
-  invalidEmails: 0,
-  duplicatesRemoved: 0
-};
-
 export const useMailerStore = create<MailerState>((set) => ({
   currentView: "dashboard",
-  contacts: [],
-  metrics: initialMetrics,
-  prompt: "",
-  generatedHtml: "<p>La previsualizacion aparecera aqui.</p>",
   assets: [],
   campaigns: [],
   templates: [],
@@ -60,9 +42,6 @@ export const useMailerStore = create<MailerState>((set) => ({
   selectedTemplateId: null,
   selectedWhatsAppTemplateId: null,
   setCurrentView: (currentView) => set({ currentView }),
-  setContacts: (contacts, metrics) => set({ contacts, metrics }),
-  setPrompt: (prompt) => set({ prompt }),
-  setGeneratedHtml: (generatedHtml) => set({ generatedHtml }),
   addAsset: (asset) => set((state) => ({ assets: [asset, ...state.assets] })),
   removeAsset: (id) => set((state) => ({ assets: state.assets.filter((a) => a.id !== id) })),
   addCampaign: (campaign) => set((state) => ({ campaigns: [campaign, ...state.campaigns] })),

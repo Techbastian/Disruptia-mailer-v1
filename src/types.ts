@@ -36,6 +36,7 @@ export type CampaignHistoryItem = {
   createdAt: string;
   recipients: number;
   status: "draft" | "queued" | "sent" | "failed";
+  validationMetrics: CampaignMetrics | null;
 };
 
 export type Project = {

@@ -18,7 +18,6 @@ export default function App() {
     currentView,
     setCurrentView,
     campaigns,
-    metrics,
     assets,
     templates,
     projects,
@@ -157,10 +156,12 @@ export default function App() {
       {currentView === "dashboard" && (
         <DashboardView
           campaigns={campaigns}
-          metrics={metrics}
           onDeleteCampaign={async (id) => {
             await deleteCampaign(id);
             removeCampaign(id);
+          }}
+          onRefresh={async () => {
+            setCampaigns(await listCampaigns());
           }}
         />
       )}

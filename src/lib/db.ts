@@ -1,4 +1,4 @@
-import type { AssetItem, CampaignHistoryItem, EmailTemplate, Project, WhatsAppTemplate } from "../types";
+import type { AssetItem, CampaignHistoryItem, CampaignMetrics, EmailTemplate, Project, WhatsAppTemplate } from "../types";
 import { DEFAULT_ACTOR_ID, supabase, SUPABASE_BUCKET_ASSETS } from "./supabase";
 
 type CreateCampaignInput = {
@@ -8,6 +8,7 @@ type CreateCampaignInput = {
   htmlRaw: string;
   htmlSanitized: string;
   recipientCountEstimate: number;
+  validationMetrics: CampaignMetrics | null;
 };
 
 function ensureSupabase() {
@@ -17,22 +18,29 @@ function ensureSupabase() {
   return supabase;
 }
 
-export async function listCampaigns(): Promise<CampaignHistoryItem[]> {
-  const client = ensureSupabase();
-  const { data, error } = await client
-    .from("campaigns")
-    .select("id,title,status,recipient_count_estimate,created_at")
-    .order("created_at", { ascending: false })
-    .limit(50);
+const CAMPAIGN_SELECT = "id,title,status,recipient_count_estimate,validation_metrics,created_at";
 
-  if (error) throw error;
-  return (data ?? []).map((row) => ({
+function rowToCampaign(row: Record<string, unknown>): CampaignHistoryItem {
+  return {
     id: row.id as string,
     title: row.title as string,
     status: row.status as CampaignHistoryItem["status"],
     recipients: (row.recipient_count_estimate as number) ?? 0,
+    validationMetrics: (row.validation_metrics as CampaignHistoryItem["validationMetrics"]) ?? null,
     createdAt: row.created_at as string
-  }));
+  };
+}
+
+export async function listCampaigns(): Promise<CampaignHistoryItem[]> {
+  const client = ensureSupabase();
+  const { data, error } = await client
+    .from("campaigns")
+    .select(CAMPAIGN_SELECT)
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  if (error) throw error;
+  return (data ?? []).map(rowToCampaign);
 }
 
 export async function createCampaign(input: CreateCampaignInput): Promise<CampaignHistoryItem> {
@@ -47,20 +55,23 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Campai
       html_raw: input.htmlRaw || null,
       html_sanitized: input.htmlSanitized || null,
       recipient_count_estimate: input.recipientCountEstimate,
+      validation_metrics: input.validationMetrics,
       created_by: DEFAULT_ACTOR_ID
     })
-    .select("id,title,status,recipient_count_estimate,created_at")
+    .select(CAMPAIGN_SELECT)
     .single();
 
   if (error) throw error;
+  return rowToCampaign(data);
+}
 
-  return {
-    id: data.id as string,
-    title: data.title as string,
-    status: data.status as CampaignHistoryItem["status"],
-    recipients: (data.recipient_count_estimate as number) ?? 0,
-    createdAt: data.created_at as string
-  };
+export async function updateCampaignStatus(
+  id: string,
+  status: CampaignHistoryItem["status"]
+): Promise<void> {
+  const client = ensureSupabase();
+  const { error } = await client.from("campaigns").update({ status }).eq("id", id);
+  if (error) throw error;
 }
 
 export async function createCampaignRun(campaignId: string): Promise<void> {
@@ -305,6 +316,9 @@ export async function deleteWhatsAppTemplate(id: string): Promise<void> {
 
 export async function deleteCampaign(id: string): Promise<void> {
   const client = ensureSupabase();
+  // Primero los runs asociados para no dejar huerfanos (no hay ON DELETE CASCADE).
+  const { error: runsError } = await client.from("campaign_runs").delete().eq("campaign_id", id);
+  if (runsError) throw runsError;
   const { error } = await client.from("campaigns").delete().eq("id", id);
   if (error) throw error;
 }

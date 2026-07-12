@@ -56,21 +56,31 @@ export async function generateTemplateHtml(input: GenerateInput): Promise<string
       }
     : null;
 
-  const response = await fetch(FUNCTION_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`
-    },
-    body: JSON.stringify({
-      content: input.content.trim(),
-      variables: input.variables,
-      baseIsGeneral: input.baseProjectId === null,
-      referenceTemplate,
-      bannerImageUrl: input.bannerImageUrl
-    })
-  });
+  let response: Response;
+  try {
+    response = await fetch(FUNCTION_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`
+      },
+      body: JSON.stringify({
+        content: input.content.trim(),
+        variables: input.variables,
+        baseIsGeneral: input.baseProjectId === null,
+        referenceTemplate,
+        bannerImageUrl: input.bannerImageUrl
+      }),
+      // La generación con Claude puede tardar; corta a los 90s en vez de colgar la UI.
+      signal: AbortSignal.timeout(90_000)
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      throw new Error("La generación tardó más de 90 segundos y se canceló. Probá de nuevo con un contenido más corto.");
+    }
+    throw err;
+  }
 
   if (!response.ok) {
     let message = `Error al generar (${response.status}).`;

@@ -1,8 +1,10 @@
-import { useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, ChevronRight, Send, Upload } from "lucide-react";
+import { useMemo, useState } from "react";
+import { AlertTriangle, CheckCircle2, ChevronRight, Send } from "lucide-react";
+import FileDropzone from "../components/FileDropzone";
+import StatCard from "../components/StatCard";
 import { parseContactsFile, type InvalidRow } from "../lib/csv";
-import { sendCampaign } from "../lib/api";
-import { createCampaign, createCampaignRun } from "../lib/db";
+import { sendCampaign, sendTestEmail } from "../lib/api";
+import { createCampaign, createCampaignRun, updateCampaignStatus } from "../lib/db";
 import { sanitizeHtml } from "../lib/sanitizeHtml";
 import type { CampaignHistoryItem, CampaignMetrics, ContactRecord, EmailTemplate } from "../types";
 
@@ -17,6 +19,9 @@ function substituteVars(html: string, vars: Record<string, string>): string {
     return vars[key.toLowerCase()] ?? match;
   });
 }
+
+// Toda prueba se envía siempre a este correo; los demás se agregan por envío.
+const DEFAULT_TEST_EMAIL = "sebastian.mojica@disruptia.co";
 
 const STEP_LABELS = ["Destinatarios", "Estructura", "Contenido", "Confirmar"];
 
@@ -79,91 +84,26 @@ function Step1({
   ) => void;
   onNext: () => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [parsing, setParsing] = useState(false);
-  const [parseError, setParseError] = useState("");
-
-  async function handleFile(file: File) {
-    if (!/\.(csv|xlsx)$/i.test(file.name)) {
-      setParseError("Formato no soportado. Subí un archivo .csv o .xlsx.");
-      return;
-    }
-    setParsing(true);
-    setParseError("");
-    try {
-      const result = await parseContactsFile(file);
-      onFileLoaded(result.contacts, result.metrics, result.columnNames, result.invalidRows);
-    } catch (err) {
-      setParseError(err instanceof Error ? err.message : "Error al procesar el archivo.");
-    } finally {
-      setParsing(false);
-    }
-  }
-
   const hasContacts = contacts.length > 0;
   const overLimit = contacts.length > 1000;
 
   return (
     <div className="space-y-6">
-      <div
-        className="flex cursor-pointer flex-col items-center justify-center gap-4 rounded-xl border-2 border-dashed border-border bg-surface/50 py-14 transition-colors hover:border-primary/40"
-        onClick={() => inputRef.current?.click()}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          const file = e.dataTransfer.files[0];
-          if (file) void handleFile(file);
+      <FileDropzone
+        subtitle="Archivos CSV o XLSX — columnas esperadas: email, nombre, etc."
+        onFile={async (file) => {
+          const result = await parseContactsFile(file);
+          onFileLoaded(result.contacts, result.metrics, result.columnNames, result.invalidRows);
         }}
-      >
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
-          <Upload size={22} className="text-primary" />
-        </div>
-        <div className="text-center">
-          <p className="font-semibold">{parsing ? "Procesando..." : "Arrastrá o hacé clic para subir"}</p>
-          <p className="text-sm text-text-muted">Archivos CSV o XLSX — columnas esperadas: email, nombre, etc.</p>
-        </div>
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".csv,.xlsx"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) void handleFile(file);
-          }}
-        />
-      </div>
-
-      {parseError && (
-        <p className="flex items-center gap-2 text-sm text-error">
-          <AlertTriangle size={14} />
-          {parseError}
-        </p>
-      )}
+      />
 
       {hasContacts && (
         <>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <div className="card py-4 text-center">
-              <p className="text-2xl font-bold">{metrics.totalLoaded}</p>
-              <p className="mt-1 text-xs text-text-muted">Total</p>
-            </div>
-            <div className="card border-primary/30 bg-primary/5 py-4 text-center">
-              <p className="text-2xl font-bold text-primary">{metrics.validEmails}</p>
-              <p className="mt-1 text-xs text-text-muted">Válidos</p>
-            </div>
-            <div className="card py-4 text-center">
-              <p className={`text-2xl font-bold ${metrics.invalidEmails > 0 ? "text-warning" : ""}`}>
-                {metrics.invalidEmails}
-              </p>
-              <p className="mt-1 text-xs text-text-muted">Inválidos</p>
-            </div>
-            <div className="card py-4 text-center">
-              <p className={`text-2xl font-bold ${metrics.duplicatesRemoved > 0 ? "text-warning" : ""}`}>
-                {metrics.duplicatesRemoved}
-              </p>
-              <p className="mt-1 text-xs text-text-muted">Duplicados</p>
-            </div>
+            <StatCard label="Total" value={metrics.totalLoaded} />
+            <StatCard label="Válidos" value={metrics.validEmails} tone="primary" />
+            <StatCard label="Inválidos" value={metrics.invalidEmails} tone={metrics.invalidEmails > 0 ? "warning" : undefined} />
+            <StatCard label="Duplicados" value={metrics.duplicatesRemoved} tone={metrics.duplicatesRemoved > 0 ? "warning" : undefined} />
           </div>
 
           {columnNames.length > 0 && (
@@ -433,6 +373,10 @@ function Step4({
 }) {
   const [title, setTitle] = useState(subject);
   const [error, setError] = useState("");
+  const [extraTestEmails, setExtraTestEmails] = useState<string[]>([]);
+  const [newTestEmail, setNewTestEmail] = useState("");
+  const [testSending, setTestSending] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const previewHtml = useMemo(
     () => sanitizeHtml(substituteVars(template.html, campaignVars)),
@@ -440,6 +384,43 @@ function Step4({
   );
 
   const recipientCount = Math.min(contacts.length, 1000);
+  const testEmails = [DEFAULT_TEST_EMAIL, ...extraTestEmails];
+
+  function handleAddTestEmail() {
+    const email = newTestEmail.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(email)) {
+      setTestResult({ ok: false, message: "Ingresá un correo válido para agregarlo a la prueba." });
+      return;
+    }
+    if (testEmails.includes(email)) {
+      setTestResult({ ok: false, message: "Ese correo ya está en la lista de prueba." });
+      return;
+    }
+    setExtraTestEmails((prev) => [...prev, email]);
+    setNewTestEmail("");
+    setTestResult(null);
+  }
+
+  async function handleSendTest() {
+    setTestSending(true);
+    setTestResult(null);
+    try {
+      await sendTestEmail({
+        html: previewHtml,
+        subject,
+        testEmails,
+        sampleContact: contacts[0] ?? null
+      });
+      setTestResult({
+        ok: true,
+        message: `Prueba enviada a ${testEmails.length} correo(s): ${testEmails.join(", ")}. Revisá la bandeja (y spam).`
+      });
+    } catch (err) {
+      setTestResult({ ok: false, message: err instanceof Error ? err.message : "No fue posible enviar la prueba." });
+    } finally {
+      setTestSending(false);
+    }
+  }
 
   async function handleSend() {
     if (!title.trim()) {
@@ -502,6 +483,76 @@ function Step4({
         />
       </article>
 
+      <article className="card space-y-3">
+        <div>
+          <p className="font-heading text-sm font-semibold">Correo de prueba</p>
+          <p className="mt-0.5 text-xs text-text-muted">
+            Recibí este correo antes de aprobar el envío masivo. Usa los datos del primer contacto del archivo para las
+            variables. No crea una campaña.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+            {DEFAULT_TEST_EMAIL}
+            <span className="font-normal text-primary/60">· siempre</span>
+          </span>
+          {extraTestEmails.map((email) => (
+            <span
+              key={email}
+              className="flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-xs font-semibold"
+            >
+              {email}
+              <button
+                type="button"
+                onClick={() => setExtraTestEmails((prev) => prev.filter((e) => e !== email))}
+                disabled={testSending}
+                className="text-text-muted hover:text-error"
+                aria-label={`Quitar ${email} de la prueba`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="email"
+            className="input flex-1 min-w-[240px]"
+            value={newTestEmail}
+            onChange={(e) => setNewTestEmail(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                handleAddTestEmail();
+              }
+            }}
+            placeholder="Agregar otro correo de la empresa…"
+            disabled={testSending}
+          />
+          <button
+            type="button"
+            onClick={handleAddTestEmail}
+            disabled={testSending || !newTestEmail.trim()}
+            className="btn-secondary disabled:opacity-40"
+          >
+            Agregar
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleSendTest()}
+            disabled={testSending || sending}
+            className="btn-primary disabled:opacity-40"
+          >
+            {testSending ? "Enviando prueba..." : `Enviar prueba (${testEmails.length})`}
+          </button>
+        </div>
+        {testResult && (
+          <p className={`text-sm ${testResult.ok ? "text-success" : "text-error"}`}>{testResult.message}</p>
+        )}
+      </article>
+
       {error && <p className="text-sm text-error">{error}</p>}
 
       <div className="flex justify-between">
@@ -554,10 +605,19 @@ export default function CampaignCreatorView({ templates, initialTemplateId, onCa
         prompt: "",
         htmlRaw: selectedTemplate.html,
         htmlSanitized: finalHtml,
-        recipientCountEstimate: recipientBatch.length
+        recipientCountEstimate: recipientBatch.length,
+        validationMetrics: metrics
       });
       await createCampaignRun(campaign.id);
-      await sendCampaign({ campaignId: campaign.id, html: finalHtml, subject, contacts: recipientBatch });
+      try {
+        await sendCampaign({ campaignId: campaign.id, html: finalHtml, subject, contacts: recipientBatch });
+      } catch (err) {
+        // La campaña ya existe en Supabase: marcarla fallida evita zombies
+        // "en cola" y duplicados si el usuario reintenta.
+        await updateCampaignStatus(campaign.id, "failed").catch(() => undefined);
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new Error(`El envío falló y la campaña quedó marcada como fallida. Detalle: ${detail}`);
+      }
       onCampaignCreated(campaign);
     } finally {
       setSending(false);

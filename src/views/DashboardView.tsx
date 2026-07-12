@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { Trash2 } from "lucide-react";
-import type { CampaignHistoryItem, CampaignMetrics } from "../types";
+import { RefreshCw, Trash2 } from "lucide-react";
+import type { CampaignHistoryItem } from "../types";
 
 type DashboardViewProps = {
-  metrics: CampaignMetrics;
   campaigns: CampaignHistoryItem[];
   onDeleteCampaign: (id: string) => Promise<void>;
+  onRefresh: () => Promise<void>;
 };
 
 const STATUS_MAP: Record<CampaignHistoryItem["status"], { label: string; className: string }> = {
@@ -24,9 +24,25 @@ function StatusBadge({ status }: { status: CampaignHistoryItem["status"] }) {
   );
 }
 
-export default function DashboardView({ metrics, campaigns, onDeleteCampaign }: DashboardViewProps) {
+function QualityCell({ metrics }: { metrics: CampaignHistoryItem["validationMetrics"] }) {
+  if (!metrics) return <span className="text-xs text-text-muted">—</span>;
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 text-xs">
+      <span className="font-semibold text-success">{metrics.validEmails} válidos</span>
+      <span className={metrics.invalidEmails > 0 ? "text-error" : "text-text-muted"}>
+        {metrics.invalidEmails} inválidos
+      </span>
+      <span className={metrics.duplicatesRemoved > 0 ? "text-warning" : "text-text-muted"}>
+        {metrics.duplicatesRemoved} dup.
+      </span>
+    </div>
+  );
+}
+
+export default function DashboardView({ campaigns, onDeleteCampaign, onRefresh }: DashboardViewProps) {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   async function handleDelete(id: string) {
     setDeletingId(id);
@@ -38,15 +54,35 @@ export default function DashboardView({ metrics, campaigns, onDeleteCampaign }: 
     }
   }
 
+  async function handleRefresh() {
+    setRefreshing(true);
+    try {
+      await onRefresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   const totalCampaigns = campaigns.length;
   const sentCampaigns = campaigns.filter((c) => c.status === "sent").length;
   const failedCampaigns = campaigns.filter((c) => c.status === "failed").length;
 
   return (
     <section className="space-y-6">
-      <div>
-        <h1 className="font-heading text-3xl font-bold">Dashboard / Historial</h1>
-        <p className="mt-2 text-sm text-text-muted">Seguimiento operativo de campañas y calidad de datos de contactos.</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="font-heading text-3xl font-bold">Dashboard / Historial</h1>
+          <p className="mt-2 text-sm text-text-muted">Seguimiento operativo de campañas y calidad de datos por envío.</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void handleRefresh()}
+          disabled={refreshing}
+          className="btn-secondary flex items-center gap-2 text-sm disabled:opacity-50"
+        >
+          <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} />
+          {refreshing ? "Actualizando…" : "Actualizar"}
+        </button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -64,25 +100,6 @@ export default function DashboardView({ metrics, campaigns, onDeleteCampaign }: 
         </article>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
-        <article className="card">
-          <p className="text-sm text-text-muted">Contactos cargados</p>
-          <p className="mt-2 font-heading text-3xl font-bold">{metrics.totalLoaded}</p>
-        </article>
-        <article className="card">
-          <p className="text-sm text-text-muted">Correos válidos</p>
-          <p className="mt-2 font-heading text-3xl font-bold text-success">{metrics.validEmails}</p>
-        </article>
-        <article className="card">
-          <p className="text-sm text-text-muted">Correos inválidos</p>
-          <p className="mt-2 font-heading text-3xl font-bold text-error">{metrics.invalidEmails}</p>
-        </article>
-        <article className="card">
-          <p className="text-sm text-text-muted">Duplicados removidos</p>
-          <p className="mt-2 font-heading text-3xl font-bold text-warning">{metrics.duplicatesRemoved}</p>
-        </article>
-      </div>
-
       <article className="card overflow-hidden p-0">
         <header className="border-b border-border px-6 py-4">
           <h2 className="font-heading text-xl font-semibold">Campañas recientes</h2>
@@ -94,6 +111,7 @@ export default function DashboardView({ metrics, campaigns, onDeleteCampaign }: 
                 <th className="px-6 py-3">Título</th>
                 <th className="px-6 py-3">Fecha</th>
                 <th className="px-6 py-3">Destinatarios</th>
+                <th className="px-6 py-3">Calidad de datos</th>
                 <th className="px-6 py-3">Estado</th>
                 <th className="px-6 py-3" />
               </tr>
@@ -101,7 +119,7 @@ export default function DashboardView({ metrics, campaigns, onDeleteCampaign }: 
             <tbody>
               {campaigns.length === 0 ? (
                 <tr>
-                  <td className="px-6 py-8 text-text-muted" colSpan={5}>
+                  <td className="px-6 py-8 text-text-muted" colSpan={6}>
                     Aún no hay campañas registradas.
                   </td>
                 </tr>
@@ -113,6 +131,9 @@ export default function DashboardView({ metrics, campaigns, onDeleteCampaign }: 
                       {new Date(campaign.createdAt).toLocaleString("es-CO")}
                     </td>
                     <td className="px-6 py-4">{campaign.recipients}</td>
+                    <td className="px-6 py-4">
+                      <QualityCell metrics={campaign.validationMetrics} />
+                    </td>
                     <td className="px-6 py-4">
                       <StatusBadge status={campaign.status} />
                     </td>
