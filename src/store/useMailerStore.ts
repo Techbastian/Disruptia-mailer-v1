@@ -1,5 +1,13 @@
 import { create } from "zustand";
-import type { AppView, AssetItem, CampaignHistoryItem, EmailTemplate, Project, WhatsAppTemplate } from "../types";
+import type {
+  AppView,
+  AssetItem,
+  CampaignHistoryItem,
+  EmailTemplate,
+  Project,
+  WhatsAppCampaignItem,
+  WhatsAppTemplate
+} from "../types";
 
 type MailerState = {
   currentView: AppView;
@@ -8,6 +16,7 @@ type MailerState = {
   templates: EmailTemplate[];
   projects: Project[];
   whatsappTemplates: WhatsAppTemplate[];
+  whatsappCampaigns: WhatsAppCampaignItem[];
   selectedTemplateId: string | null;
   selectedWhatsAppTemplateId: string | null;
   setCurrentView: (view: AppView) => void;
@@ -28,6 +37,9 @@ type MailerState = {
   addWhatsappTemplate: (template: WhatsAppTemplate) => void;
   updateWhatsappTemplate: (template: WhatsAppTemplate) => void;
   removeWhatsappTemplate: (id: string) => void;
+  setWhatsappCampaigns: (campaigns: WhatsAppCampaignItem[]) => void;
+  addWhatsappCampaign: (campaign: WhatsAppCampaignItem) => void;
+  removeWhatsappCampaign: (id: string) => void;
   setSelectedTemplateId: (id: string | null) => void;
   setSelectedWhatsAppTemplateId: (id: string | null) => void;
 };
@@ -39,6 +51,7 @@ export const useMailerStore = create<MailerState>((set) => ({
   templates: [],
   projects: [],
   whatsappTemplates: [],
+  whatsappCampaigns: [],
   selectedTemplateId: null,
   selectedWhatsAppTemplateId: null,
   setCurrentView: (currentView) => set({ currentView }),
@@ -71,6 +84,11 @@ export const useMailerStore = create<MailerState>((set) => ({
     })),
   removeWhatsappTemplate: (id) =>
     set((state) => ({ whatsappTemplates: state.whatsappTemplates.filter((t) => t.id !== id) })),
+  setWhatsappCampaigns: (whatsappCampaigns) => set({ whatsappCampaigns }),
+  addWhatsappCampaign: (campaign) =>
+    set((state) => ({ whatsappCampaigns: [campaign, ...state.whatsappCampaigns] })),
+  removeWhatsappCampaign: (id) =>
+    set((state) => ({ whatsappCampaigns: state.whatsappCampaigns.filter((c) => c.id !== id) })),
   setSelectedTemplateId: (selectedTemplateId) => set({ selectedTemplateId }),
   setSelectedWhatsAppTemplateId: (selectedWhatsAppTemplateId) => set({ selectedWhatsAppTemplateId })
 }));

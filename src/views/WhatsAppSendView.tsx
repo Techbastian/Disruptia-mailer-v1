@@ -1,28 +1,37 @@
 import { useMemo, useState } from "react";
-import { CheckCircle2, Info, Users } from "lucide-react";
+import { CheckCircle2, Info, Send, Users, X } from "lucide-react";
 import FileDropzone from "../components/FileDropzone";
 import StatCard from "../components/StatCard";
-import type { WhatsAppTemplate } from "../types";
+import type { WhatsAppCampaignItem, WhatsAppTemplate } from "../types";
 import {
+  normalizePhone,
   parseWhatsAppContactsFile,
   type WhatsAppContact,
   type WhatsAppInvalidRow,
   type WhatsAppMetrics
 } from "../lib/whatsappCsv";
+import { hasWhatsAppWebhookConfig, sendWhatsAppCampaign, sendWhatsAppTest, type WhatsAppRecipient } from "../lib/api";
+import { createWhatsAppCampaign, updateWhatsAppCampaignStatus } from "../lib/db";
 import { extractWaVars, WhatsAppPreview } from "./WhatsAppTemplateEditorView";
 
 type Props = {
   templates: WhatsAppTemplate[];
   onManageTemplates: () => void;
+  onCampaignCreated: (campaign: WhatsAppCampaignItem) => void;
 };
 
 type VarMapping = { source: "column" | "fixed"; value: string };
+
+// Todo mensaje de prueba va siempre a este número; los demás se agregan por envío.
+const DEFAULT_TEST_PHONE = "+573157281832";
+
+const E164_REGEX = /^\+[1-9]\d{7,14}$/;
 
 function applyWaVars(text: string, valueByIndex: Record<number, string>): string {
   return text.replace(/\{\{\s*(\d+)\s*\}\}/g, (_m, n) => valueByIndex[Number(n)] || `{{${n}}}`);
 }
 
-export default function WhatsAppSendView({ templates, onManageTemplates }: Props) {
+export default function WhatsAppSendView({ templates, onManageTemplates, onCampaignCreated }: Props) {
   const [contacts, setContacts] = useState<WhatsAppContact[]>([]);
   const [metrics, setMetrics] = useState<WhatsAppMetrics | null>(null);
   const [columnNames, setColumnNames] = useState<string[]>([]);
@@ -30,6 +39,13 @@ export default function WhatsAppSendView({ templates, onManageTemplates }: Props
 
   const [templateId, setTemplateId] = useState<string>("");
   const [mapping, setMapping] = useState<Record<number, VarMapping>>({});
+
+  const [sending, setSending] = useState(false);
+  const [sendResult, setSendResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testSending, setTestSending] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [extraTestPhones, setExtraTestPhones] = useState<string[]>([]);
+  const [newTestPhone, setNewTestPhone] = useState("");
 
   const template = useMemo(() => templates.find((t) => t.id === templateId) ?? null, [templates, templateId]);
   const vars = useMemo(
@@ -44,6 +60,8 @@ export default function WhatsAppSendView({ templates, onManageTemplates }: Props
     const next: Record<number, VarMapping> = {};
     for (const n of v) next[n] = { source: "column", value: columnNames[0] ?? "" };
     setMapping(next);
+    setSendResult(null);
+    setTestResult(null);
   }
 
   async function handleFile(file: File) {
@@ -52,6 +70,7 @@ export default function WhatsAppSendView({ templates, onManageTemplates }: Props
     setMetrics(result.metrics);
     setColumnNames(result.columnNames);
     setInvalidRows(result.invalidRows);
+    setSendResult(null);
     // Re-inicializa mapping de columnas si ya había template elegido.
     if (template) {
       setMapping((prev) => {
@@ -64,6 +83,18 @@ export default function WhatsAppSendView({ templates, onManageTemplates }: Props
         return next;
       });
     }
+  }
+
+  // Resuelve las variables {{n}} para un contacto según el mapeo (columna o valor fijo).
+  function resolveVariables(contact: WhatsAppContact | null): Record<string, string> {
+    const resolved: Record<string, string> = {};
+    for (const n of vars) {
+      const m = mapping[n];
+      if (!m) continue;
+      resolved[String(n)] =
+        m.source === "fixed" ? m.value : String(contact?.[m.value] ?? "");
+    }
+    return resolved;
   }
 
   // Preview con el primer contacto válido (columnas) + valores fijos.
@@ -84,6 +115,90 @@ export default function WhatsAppSendView({ templates, onManageTemplates }: Props
   }, [template, contacts, vars, mapping]);
 
   const hasContacts = contacts.length > 0;
+  const mappingComplete = vars.every((n) => {
+    const m = mapping[n];
+    if (!m) return false;
+    return m.source === "fixed" ? m.value.trim().length > 0 : m.value.length > 0 && hasContacts;
+  });
+  const canSendReal = hasWhatsAppWebhookConfig && !!template && hasContacts && mappingComplete;
+  const testPhones = [DEFAULT_TEST_PHONE, ...extraTestPhones];
+
+  function handleAddTestPhone() {
+    const phone = normalizePhone(newTestPhone);
+    if (!E164_REGEX.test(phone)) {
+      setTestResult({ ok: false, message: "Ingresá un número E.164 válido (ej. +573001234567)." });
+      return;
+    }
+    if (testPhones.includes(phone)) {
+      setTestResult({ ok: false, message: "Ese número ya está en la lista de prueba." });
+      return;
+    }
+    setExtraTestPhones((prev) => [...prev, phone]);
+    setNewTestPhone("");
+    setTestResult(null);
+  }
+
+  async function handleSendTest() {
+    if (!template) return;
+    setTestSending(true);
+    setTestResult(null);
+    try {
+      // Variables de la prueba: primer contacto del archivo, o valores de ejemplo si no hay archivo.
+      const sampleVars: Record<string, string> = {};
+      const resolved = resolveVariables(contacts[0] ?? null);
+      for (const n of vars) sampleVars[String(n)] = resolved[String(n)] || `Ejemplo ${n}`;
+      await sendWhatsAppTest({
+        template: { name: template.name, language: template.language },
+        testPhones,
+        variables: sampleVars
+      });
+      setTestResult({
+        ok: true,
+        message: `Prueba enviada a ${testPhones.length} número(s): ${testPhones.join(", ")}. Revisá WhatsApp.`
+      });
+    } catch (err) {
+      setTestResult({ ok: false, message: err instanceof Error ? err.message : "No fue posible enviar la prueba." });
+    } finally {
+      setTestSending(false);
+    }
+  }
+
+  async function handleSendReal() {
+    if (!template || !canSendReal) return;
+    setSending(true);
+    setSendResult(null);
+    try {
+      const recipients: WhatsAppRecipient[] = contacts.map((c) => ({
+        phone: c.phone,
+        variables: resolveVariables(c)
+      }));
+
+      const campaign = await createWhatsAppCampaign({
+        templateName: template.name,
+        templateLanguage: template.language,
+        recipientCount: recipients.length,
+        validationMetrics: metrics
+      });
+
+      try {
+        await sendWhatsAppCampaign({
+          sendId: campaign.id,
+          template: { name: template.name, language: template.language },
+          recipients
+        });
+      } catch (webhookError) {
+        // No dejar la campaña zombie en "queued" si el webhook falló (paridad con email).
+        await updateWhatsAppCampaignStatus(campaign.id, "failed").catch(() => undefined);
+        throw webhookError;
+      }
+
+      onCampaignCreated(campaign);
+    } catch (err) {
+      setSendResult({ ok: false, message: err instanceof Error ? err.message : "No fue posible iniciar el envío." });
+    } finally {
+      setSending(false);
+    }
+  }
 
   return (
     <section className="space-y-6">
@@ -212,44 +327,133 @@ export default function WhatsAppSendView({ templates, onManageTemplates }: Props
         )}
       </article>
 
-      {/* Paso 3: preview + envío (stub) */}
-      {previewTemplate && (
-        <article className="card space-y-4">
-          <p className="font-heading font-semibold">3. Vista previa y envío</p>
-          <div className="grid gap-4 md:grid-cols-[360px_1fr]">
+      {/* Paso 3: preview + envío */}
+      {previewTemplate && template && (
+        <>
+          <article className="card space-y-4">
+            <p className="font-heading font-semibold">3. Vista previa</p>
+            <div className="grid gap-4 md:grid-cols-[360px_1fr]">
+              <div>
+                <WhatsAppPreview template={previewTemplate} />
+                <p className="mt-2 text-xs text-text-muted">
+                  Previsualizado con {hasContacts ? "el primer contacto del archivo" : "valores de ejemplo"}.
+                </p>
+              </div>
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm">
+                  <Users size={15} className="text-text-muted" />
+                  <span>
+                    {contacts.length > 0
+                      ? `${contacts.length} destinatario(s) válido(s)`
+                      : "Sin contactos cargados"}
+                  </span>
+                </div>
+                {!hasWhatsAppWebhookConfig && (
+                  <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm text-yellow-800">
+                    <Info size={15} className="mt-0.5 shrink-0 text-yellow-600" />
+                    <span>
+                      Falta configurar <code className="font-mono text-xs">VITE_N8N_WHATSAPP_WEBHOOK_URL</code> y{" "}
+                      <code className="font-mono text-xs">VITE_N8N_WHATSAPP_WEBHOOK_SECRET</code> en el .env. Guía del
+                      workflow: <code className="font-mono text-xs">docs/n8n-whatsapp-flow.md</code>.
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </article>
+
+          {/* Mensaje de prueba */}
+          <article className="card space-y-4">
             <div>
-              <WhatsAppPreview template={previewTemplate} />
-              <p className="mt-2 text-xs text-text-muted">
-                Previsualizado con {hasContacts ? "el primer contacto del archivo" : "valores de ejemplo"}.
+              <p className="font-heading font-semibold">Mensaje de prueba</p>
+              <p className="mt-1 text-sm text-text-muted">
+                Envía la plantilla con las variables resueltas del primer contacto (o valores de ejemplo). No crea un
+                envío en el historial.
               </p>
             </div>
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 text-sm">
-                <Users size={15} className="text-text-muted" />
-                <span>
-                  {contacts.length > 0
-                    ? `${contacts.length} destinatario(s) válido(s)`
-                    : "Sin contactos cargados"}
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+                {DEFAULT_TEST_PHONE}
+                <span className="font-normal text-primary/60">· siempre</span>
+              </span>
+              {extraTestPhones.map((phone) => (
+                <span
+                  key={phone}
+                  className="flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-xs font-semibold"
+                >
+                  {phone}
+                  <button
+                    type="button"
+                    onClick={() => setExtraTestPhones((prev) => prev.filter((p) => p !== phone))}
+                    className="text-text-muted hover:text-error"
+                    aria-label={`Quitar ${phone}`}
+                  >
+                    <X size={12} />
+                  </button>
                 </span>
-              </div>
-              <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm text-yellow-800">
-                <Info size={15} className="mt-0.5 shrink-0 text-yellow-600" />
-                <span>
-                  El despacho a YCloud se conecta en el próximo paso (vía N8N). Por ahora podés preparar y revisar el
-                  envío.
-                </span>
-              </div>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                className="input w-56 py-1.5 text-sm"
+                value={newTestPhone}
+                onChange={(e) => setNewTestPhone(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleAddTestPhone();
+                  }
+                }}
+                placeholder="+573001234567"
+              />
+              <button type="button" onClick={handleAddTestPhone} className="btn-secondary py-1.5 text-sm">
+                Agregar número
+              </button>
               <button
                 type="button"
-                disabled
-                className="btn-primary flex w-full items-center justify-center gap-2 opacity-50"
+                onClick={() => void handleSendTest()}
+                disabled={!hasWhatsAppWebhookConfig || testSending || sending}
+                className="btn-primary disabled:opacity-40"
               >
-                <CheckCircle2 size={16} />
-                Enviar por WhatsApp (próximamente)
+                {testSending ? "Enviando prueba..." : `Enviar prueba (${testPhones.length})`}
               </button>
             </div>
-          </div>
-        </article>
+            {testResult && (
+              <p className={`text-sm ${testResult.ok ? "text-success" : "text-error"}`}>{testResult.message}</p>
+            )}
+          </article>
+
+          {/* Envío real */}
+          <article className="card space-y-3">
+            <p className="font-heading font-semibold">Confirmar envío</p>
+            {!mappingComplete && vars.length > 0 && (
+              <p className="text-sm text-text-muted">
+                Completá el mapeo de todas las variables (y subí un archivo si usás columnas) para habilitar el envío.
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => void handleSendReal()}
+              disabled={!canSendReal || sending || testSending}
+              className="btn-primary flex w-full items-center justify-center gap-2 disabled:opacity-40"
+            >
+              {sending ? (
+                <>
+                  <Send size={16} className="animate-pulse" />
+                  Enviando…
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 size={16} />
+                  Enviar por WhatsApp ({contacts.length})
+                </>
+              )}
+            </button>
+            {sendResult && !sendResult.ok && <p className="text-sm text-error">{sendResult.message}</p>}
+          </article>
+        </>
       )}
     </section>
   );

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import Layout from "./components/Layout";
-import { createProject, deleteAsset, deleteCampaign, listAssets, listCampaigns, listProjects, listTemplates, listWhatsAppTemplates, saveTemplate, setTemplateProject } from "./lib/db";
+import { createProject, deleteAsset, deleteCampaign, deleteWhatsAppCampaign, listAssets, listCampaigns, listProjects, listTemplates, listWhatsAppCampaigns, listWhatsAppTemplates, saveTemplate, setTemplateProject } from "./lib/db";
 import { BASE_TEMPLATES } from "./data/baseTemplates";
 import TemplatesLibraryView from "./views/TemplatesLibraryView";
 import TemplateEditorView from "./views/TemplateEditorView";
@@ -36,8 +36,12 @@ export default function App() {
     addProject,
     setSelectedTemplateId,
     whatsappTemplates,
+    whatsappCampaigns,
     selectedWhatsAppTemplateId,
     setWhatsappTemplates,
+    setWhatsappCampaigns,
+    addWhatsappCampaign,
+    removeWhatsappCampaign,
     addWhatsappTemplate,
     updateWhatsappTemplate,
     removeWhatsappTemplate,
@@ -67,9 +71,15 @@ export default function App() {
       } catch (error) {
         console.error("Error sincronizando campañas/activos/proyectos:", error);
       }
+      // Aparte: si la tabla whatsapp_campaigns aún no existe (migración 0004), no rompe el resto.
+      try {
+        setWhatsappCampaigns(await listWhatsAppCampaigns());
+      } catch (error) {
+        console.error("Error sincronizando envíos WhatsApp (¿migración 0004 corrida?):", error);
+      }
     }
     void syncCampaignsAndAssets();
-  }, [setAssets, setCampaigns, setProjects]);
+  }, [setAssets, setCampaigns, setProjects, setWhatsappCampaigns]);
 
   async function handleCreateProject(name: string) {
     const project = await createProject(name);
@@ -156,12 +166,22 @@ export default function App() {
       {currentView === "dashboard" && (
         <DashboardView
           campaigns={campaigns}
+          whatsappCampaigns={whatsappCampaigns}
           onDeleteCampaign={async (id) => {
             await deleteCampaign(id);
             removeCampaign(id);
           }}
+          onDeleteWhatsAppCampaign={async (id) => {
+            await deleteWhatsAppCampaign(id);
+            removeWhatsappCampaign(id);
+          }}
           onRefresh={async () => {
             setCampaigns(await listCampaigns());
+            try {
+              setWhatsappCampaigns(await listWhatsAppCampaigns());
+            } catch (error) {
+              console.error("Error actualizando envíos WhatsApp (¿migración 0004 corrida?):", error);
+            }
           }}
         />
       )}
@@ -283,6 +303,10 @@ export default function App() {
         <WhatsAppSendView
           templates={whatsappTemplates}
           onManageTemplates={() => setCurrentView("whatsapp-templates")}
+          onCampaignCreated={(campaign) => {
+            addWhatsappCampaign(campaign);
+            setCurrentView("dashboard");
+          }}
         />
       )}
     </Layout>

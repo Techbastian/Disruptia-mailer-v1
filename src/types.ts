@@ -57,6 +57,24 @@ export type EmailTemplate = {
   updatedAt: string;
 };
 
+// Métricas de validación del archivo de teléfonos (misma forma que WhatsAppMetrics de whatsappCsv).
+export type WhatsAppCampaignMetrics = {
+  totalLoaded: number;
+  validPhones: number;
+  invalidPhones: number;
+  duplicatesRemoved: number;
+};
+
+export type WhatsAppCampaignItem = {
+  id: string;
+  templateName: string;
+  templateLanguage: string;
+  recipients: number;
+  status: "queued" | "sent" | "failed";
+  validationMetrics: WhatsAppCampaignMetrics | null;
+  createdAt: string;
+};
+
 export type WhatsAppButtonType = "QUICK_REPLY" | "URL" | "PHONE_NUMBER";
 
 export type WhatsAppButton = {

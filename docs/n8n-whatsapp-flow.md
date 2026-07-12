@@ -9,7 +9,6 @@ cuando se active el botón "Enviar por WhatsApp".
 **Método:** `POST` a la URL del webhook (se configurará en `.env` como `VITE_N8N_WHATSAPP_WEBHOOK_URL`).
 
 **Headers:**
-
 ```
 Content-Type: application/json
 x-disruptia-webhook-secret: <VITE_N8N_WHATSAPP_WEBHOOK_SECRET>
@@ -93,9 +92,78 @@ x-disruptia-webhook-secret: <VITE_N8N_WHATSAPP_WEBHOOK_SECRET>
 - YCloud responde `4xx` por plantilla inexistente/idioma incorrecto → el error más común: `template.name` o `language` no coinciden con lo aprobado.
 - Números sin WhatsApp no fallan al enviar (fallan async); el estado real llega por webhooks de YCloud (mejora futura: suscribirse a `whatsapp.message.updated`).
 
-## 4. Checklist para activar el canal
+## 4. Paso a paso en la UI de N8N (instancia: n8n.srv1018582.hstgr.cloud)
 
-- [ ] Crear el workflow según esta guía y activarlo.
-- [ ] Definir el secreto compartido y pasarme la URL del webhook + secreto.
-- [ ] Agregar a `.env`: `VITE_N8N_WHATSAPP_WEBHOOK_URL` y `VITE_N8N_WHATSAPP_WEBHOOK_SECRET`.
-- [ ] (App, lo hace Claude) Cablear el botón de envío real + envío de prueba a un número propio + persistencia en `whatsapp_campaigns`.
+Análogo al workflow de email (`/webhook/envio-correos`), pero para WhatsApp.
+
+**Nodo 1 — Webhook**
+1. Workflow nuevo → nombralo `Disruptia WhatsApp`.
+2. Agregá un nodo **Webhook**: HTTP Method `POST`, Path `envio-whatsapp`, Respond `Immediately`.
+3. La URL de producción quedará: `https://n8n.srv1018582.hstgr.cloud/webhook/envio-whatsapp`
+   (mientras el workflow no esté "Active", solo funciona la Test URL `.../webhook-test/...`).
+
+**Nodo 2 — IF (validar secreto)**
+1. Agregá un nodo **IF** conectado al Webhook.
+2. Condición (String → Equals):
+   - Value 1: `{{ $json.headers["x-disruptia-webhook-secret"] }}`
+   - Value 2: el secreto que inventes (una cadena larga aleatoria; la misma que va al `.env` de la app).
+3. Solo la rama **true** continúa; la false queda sin conectar.
+
+**Nodo 3 — Split Out (destinatarios)**
+1. Agregá un nodo **Split Out**.
+2. Field to Split Out: `body.recipients` → genera un item por destinatario (`phone` + `variables`).
+
+**Nodo 4 — Loop Over Items**
+1. Agregá **Loop Over Items** (Split in Batches), Batch Size `10`.
+
+**Nodo 5 — Code (armar payload YCloud)**
+Dentro del loop, un nodo **Code** (Run Once for Each Item) — arma los `parameters` según cuántas
+variables tenga la plantilla, sin hardcodear la cantidad:
+
+```js
+const t = $('Webhook').first().json.body.template;
+const r = $json;
+const nums = Object.keys(r.variables ?? {}).sort((a, b) => Number(a) - Number(b));
+const payload = {
+  from: "TU_NUMERO_EMISOR_YCLOUD", // ej. +57300XXXXXXX (el número registrado en YCloud)
+  to: r.phone,
+  type: "template",
+  template: { name: t.name, language: { code: t.language } }
+};
+if (nums.length > 0) {
+  payload.template.components = [{
+    type: "body",
+    parameters: nums.map((n) => ({ type: "text", text: String(r.variables[n]) }))
+  }];
+}
+return { json: payload };
+```
+
+**Nodo 6 — HTTP Request (YCloud)**
+1. Method `POST`, URL `https://api.ycloud.com/v2/whatsapp/messages/sendDirectly`.
+2. Authentication: Generic → Header Auth → Name `X-API-Key`, Value = tu API key de YCloud
+   (guardala como credencial de N8N; nunca en la app).
+3. Send Body: ON → Body Content Type `JSON` → Specify Body `Using JSON` → `{{ JSON.stringify($json) }}`.
+4. Settings del nodo: **On Error → Continue** (un número que falle no frena el lote).
+5. Salida del nodo → conectar a un nodo **Wait** de `1` segundo → y este de vuelta a **Loop Over Items**.
+
+**Nodo 7 — Reporte a Supabase (rama "done" del loop)**
+1. De la salida **done** del Loop, un nodo **IF**: `{{ $('Webhook').first().json.body.sendId }}` → String → `Does Not Start With` → `test-`.
+2. En la rama true, un **HTTP Request**:
+   - Method `PATCH`
+   - URL: `https://upkvrgncduvxzjvtxbpv.supabase.co/rest/v1/whatsapp_campaigns?id=eq.{{ $('Webhook').first().json.body.sendId }}`
+   - Headers: `apikey: <anon key>`, `Authorization: Bearer <anon key>`, `Content-Type: application/json`, `Prefer: return=minimal`
+   - Body JSON: `{ "status": "sent" }`
+   (la anon key es la misma `VITE_SUPABASE_ANON_KEY` del `.env`; RLS está deshabilitado en la tabla).
+
+**Activar**
+1. Guardá y poné el workflow en **Active**.
+2. Probá con la app (botón "Enviar prueba" — usa `sendId: test-*`, no toca Supabase).
+
+## 5. Checklist para activar el canal
+
+- [ ] Correr `db/migrations/0004_whatsapp_campaigns.sql` en el SQL editor de Supabase.
+- [ ] Crear el workflow según la sección 4 y activarlo.
+- [ ] Descomentar y completar en `.env`: `VITE_N8N_WHATSAPP_WEBHOOK_URL` y `VITE_N8N_WHATSAPP_WEBHOOK_SECRET` (reiniciar `npm run dev`).
+- [ ] Registrar la plantilla aprobada de YCloud en la app (sección Plantillas WhatsApp — la tabla está vacía).
+- [x] (App) Envío real + envío de prueba (siempre a +573157281832 + extras) + persistencia en `whatsapp_campaigns` + historial en Dashboard.

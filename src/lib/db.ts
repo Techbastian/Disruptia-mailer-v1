@@ -1,4 +1,12 @@
-import type { AssetItem, CampaignHistoryItem, CampaignMetrics, EmailTemplate, Project, WhatsAppTemplate } from "../types";
+import type {
+  AssetItem,
+  CampaignHistoryItem,
+  CampaignMetrics,
+  EmailTemplate,
+  Project,
+  WhatsAppCampaignItem,
+  WhatsAppTemplate
+} from "../types";
 import { DEFAULT_ACTOR_ID, supabase, SUPABASE_BUCKET_ASSETS } from "./supabase";
 
 type CreateCampaignInput = {
@@ -311,6 +319,73 @@ export async function saveWhatsAppTemplate(input: SaveWhatsAppTemplateInput): Pr
 export async function deleteWhatsAppTemplate(id: string): Promise<void> {
   const client = ensureSupabase();
   const { error } = await client.from("whatsapp_templates").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ── WhatsApp campaigns (historial de envíos) ──────────────────────────────────
+
+const WA_CAMPAIGN_SELECT = "id,template_name,template_language,recipient_count,status,validation_metrics,created_at";
+
+function rowToWhatsAppCampaign(row: Record<string, unknown>): WhatsAppCampaignItem {
+  return {
+    id: row.id as string,
+    templateName: row.template_name as string,
+    templateLanguage: (row.template_language as string) ?? "es",
+    recipients: (row.recipient_count as number) ?? 0,
+    status: row.status as WhatsAppCampaignItem["status"],
+    validationMetrics: (row.validation_metrics as WhatsAppCampaignItem["validationMetrics"]) ?? null,
+    createdAt: row.created_at as string
+  };
+}
+
+export async function listWhatsAppCampaigns(): Promise<WhatsAppCampaignItem[]> {
+  const client = ensureSupabase();
+  const { data, error } = await client
+    .from("whatsapp_campaigns")
+    .select(WA_CAMPAIGN_SELECT)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) throw error;
+  return (data ?? []).map(rowToWhatsAppCampaign);
+}
+
+export type CreateWhatsAppCampaignInput = {
+  templateName: string;
+  templateLanguage: string;
+  recipientCount: number;
+  validationMetrics: WhatsAppCampaignItem["validationMetrics"];
+};
+
+export async function createWhatsAppCampaign(input: CreateWhatsAppCampaignInput): Promise<WhatsAppCampaignItem> {
+  const client = ensureSupabase();
+  const { data, error } = await client
+    .from("whatsapp_campaigns")
+    .insert({
+      template_name: input.templateName,
+      template_language: input.templateLanguage,
+      recipient_count: input.recipientCount,
+      status: "queued",
+      validation_metrics: input.validationMetrics,
+      created_by: DEFAULT_ACTOR_ID
+    })
+    .select(WA_CAMPAIGN_SELECT)
+    .single();
+  if (error) throw error;
+  return rowToWhatsAppCampaign(data);
+}
+
+export async function updateWhatsAppCampaignStatus(
+  id: string,
+  status: WhatsAppCampaignItem["status"]
+): Promise<void> {
+  const client = ensureSupabase();
+  const { error } = await client.from("whatsapp_campaigns").update({ status }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteWhatsAppCampaign(id: string): Promise<void> {
+  const client = ensureSupabase();
+  const { error } = await client.from("whatsapp_campaigns").delete().eq("id", id);
   if (error) throw error;
 }
 

@@ -16,3 +16,6 @@ dist/
 Thumbs.db
 .idea/
 .vscode/
+
+# Supabase CLI (estado local del link)
+supabase/.temp/

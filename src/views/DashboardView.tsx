@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { RefreshCw, Trash2 } from "lucide-react";
-import type { CampaignHistoryItem } from "../types";
+import type { CampaignHistoryItem, WhatsAppCampaignItem } from "../types";
 
 type DashboardViewProps = {
   campaigns: CampaignHistoryItem[];
+  whatsappCampaigns: WhatsAppCampaignItem[];
   onDeleteCampaign: (id: string) => Promise<void>;
+  onDeleteWhatsAppCampaign: (id: string) => Promise<void>;
   onRefresh: () => Promise<void>;
 };
 
@@ -39,15 +41,41 @@ function QualityCell({ metrics }: { metrics: CampaignHistoryItem["validationMetr
   );
 }
 
-export default function DashboardView({ campaigns, onDeleteCampaign, onRefresh }: DashboardViewProps) {
+function WaQualityCell({ metrics }: { metrics: WhatsAppCampaignItem["validationMetrics"] }) {
+  if (!metrics) return <span className="text-xs text-text-muted">—</span>;
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 text-xs">
+      <span className="font-semibold text-success">{metrics.validPhones} válidos</span>
+      <span className={metrics.invalidPhones > 0 ? "text-error" : "text-text-muted"}>
+        {metrics.invalidPhones} inválidos
+      </span>
+      <span className={metrics.duplicatesRemoved > 0 ? "text-warning" : "text-text-muted"}>
+        {metrics.duplicatesRemoved} dup.
+      </span>
+    </div>
+  );
+}
+
+export default function DashboardView({
+  campaigns,
+  whatsappCampaigns,
+  onDeleteCampaign,
+  onDeleteWhatsAppCampaign,
+  onRefresh
+}: DashboardViewProps) {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  async function handleDelete(id: string) {
+  // Los ids son UUID, no colisionan entre tablas: confirmId/deletingId se comparten.
+  async function handleDelete(id: string, channel: "email" | "whatsapp") {
     setDeletingId(id);
     try {
-      await onDeleteCampaign(id);
+      if (channel === "email") {
+        await onDeleteCampaign(id);
+      } else {
+        await onDeleteWhatsAppCampaign(id);
+      }
     } finally {
       setDeletingId(null);
       setConfirmId(null);
@@ -142,7 +170,7 @@ export default function DashboardView({ campaigns, onDeleteCampaign, onRefresh }
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
-                            onClick={() => void handleDelete(campaign.id)}
+                            onClick={() => void handleDelete(campaign.id, "email")}
                             disabled={deletingId === campaign.id}
                             className="rounded-lg bg-error px-3 py-1 text-xs font-semibold text-white disabled:opacity-60"
                           >
@@ -162,6 +190,84 @@ export default function DashboardView({ campaigns, onDeleteCampaign, onRefresh }
                           onClick={() => setConfirmId(campaign.id)}
                           className="rounded-lg p-1.5 text-text-muted hover:bg-error/10 hover:text-error transition-colors"
                           aria-label="Eliminar campaña"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article className="card overflow-hidden p-0">
+        <header className="border-b border-border px-6 py-4">
+          <h2 className="font-heading text-xl font-semibold">Envíos WhatsApp recientes</h2>
+        </header>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="bg-surface text-text-muted">
+              <tr>
+                <th className="px-6 py-3">Plantilla</th>
+                <th className="px-6 py-3">Fecha</th>
+                <th className="px-6 py-3">Destinatarios</th>
+                <th className="px-6 py-3">Calidad de datos</th>
+                <th className="px-6 py-3">Estado</th>
+                <th className="px-6 py-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {whatsappCampaigns.length === 0 ? (
+                <tr>
+                  <td className="px-6 py-8 text-text-muted" colSpan={6}>
+                    Aún no hay envíos de WhatsApp registrados.
+                  </td>
+                </tr>
+              ) : (
+                whatsappCampaigns.map((campaign) => (
+                  <tr key={campaign.id} className="border-t border-border">
+                    <td className="px-6 py-4 font-medium">
+                      {campaign.templateName}{" "}
+                      <span className="text-xs text-text-muted">({campaign.templateLanguage})</span>
+                    </td>
+                    <td className="px-6 py-4 text-text-muted">
+                      {new Date(campaign.createdAt).toLocaleString("es-CO")}
+                    </td>
+                    <td className="px-6 py-4">{campaign.recipients}</td>
+                    <td className="px-6 py-4">
+                      <WaQualityCell metrics={campaign.validationMetrics} />
+                    </td>
+                    <td className="px-6 py-4">
+                      <StatusBadge status={campaign.status} />
+                    </td>
+                    <td className="px-6 py-4">
+                      {confirmId === campaign.id ? (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void handleDelete(campaign.id, "whatsapp")}
+                            disabled={deletingId === campaign.id}
+                            className="rounded-lg bg-error px-3 py-1 text-xs font-semibold text-white disabled:opacity-60"
+                          >
+                            {deletingId === campaign.id ? "Borrando..." : "Confirmar"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmId(null)}
+                            className="rounded-lg border border-border px-3 py-1 text-xs font-semibold hover:bg-surface"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmId(campaign.id)}
+                          className="rounded-lg p-1.5 text-text-muted hover:bg-error/10 hover:text-error transition-colors"
+                          aria-label="Eliminar envío"
                         >
                           <Trash2 size={15} />
                         </button>

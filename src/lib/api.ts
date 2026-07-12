@@ -50,6 +50,69 @@ export async function sendCampaign(payload: SendCampaignPayload): Promise<void> 
  * usando los datos del contacto de muestra para sustituir variables.
  * No crea campaña en Supabase; el campaignId sintético no matchea ninguna fila.
  */
+// ── WhatsApp (contrato en docs/n8n-whatsapp-flow.md) ─────────────────────────
+
+const waWebhookUrl = import.meta.env.VITE_N8N_WHATSAPP_WEBHOOK_URL ?? "";
+const waWebhookSecret = import.meta.env.VITE_N8N_WHATSAPP_WEBHOOK_SECRET ?? "";
+
+// La vista deshabilita el envío real mientras el webhook no esté configurado.
+export const hasWhatsAppWebhookConfig = Boolean(waWebhookUrl && waWebhookSecret);
+
+export type WhatsAppRecipient = {
+  phone: string;
+  // Variables posicionales ya resueltas: { "1": "Juan", "2": "viernes" }.
+  variables: Record<string, string>;
+};
+
+export type SendWhatsAppPayload = {
+  sendId: string;
+  template: { name: string; language: string };
+  recipients: WhatsAppRecipient[];
+};
+
+export async function sendWhatsAppCampaign(payload: SendWhatsAppPayload): Promise<void> {
+  if (!waWebhookUrl) throw new Error("Falta configurar VITE_N8N_WHATSAPP_WEBHOOK_URL");
+  if (!waWebhookSecret) throw new Error("Falta configurar VITE_N8N_WHATSAPP_WEBHOOK_SECRET");
+
+  let response: Response;
+  try {
+    response = await fetch(waWebhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        [webhookSecretHeader]: waWebhookSecret
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS)
+    });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      throw new Error("El webhook de WhatsApp no respondió a tiempo (30s). Verificá que el workflow esté activo.");
+    }
+    throw err;
+  }
+
+  if (!response.ok) {
+    throw new Error(`Error al llamar webhook WhatsApp de n8n: ${response.status}`);
+  }
+}
+
+/**
+ * Envío de prueba WhatsApp: mismo webhook, sendId con prefijo test- para que
+ * N8N no reporte estado a Supabase (ver docs/n8n-whatsapp-flow.md).
+ */
+export async function sendWhatsAppTest(input: {
+  template: { name: string; language: string };
+  testPhones: string[];
+  variables: Record<string, string>;
+}): Promise<void> {
+  await sendWhatsAppCampaign({
+    sendId: `test-${Date.now()}`,
+    template: input.template,
+    recipients: input.testPhones.map((phone) => ({ phone, variables: input.variables }))
+  });
+}
+
 export async function sendTestEmail(input: {
   html: string;
   subject: string;
