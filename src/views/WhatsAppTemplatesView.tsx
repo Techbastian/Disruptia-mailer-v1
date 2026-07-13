@@ -1,9 +1,10 @@
-import { AlertTriangle, FilePlus, Globe, RefreshCw, Tag } from "lucide-react";
-import type { WhatsAppTemplate } from "../types";
+import { AlertTriangle, FilePlus, FolderKanban, Globe, RefreshCw, Tag } from "lucide-react";
+import type { Project, WhatsAppTemplate } from "../types";
 import { WhatsAppPreview } from "./WhatsAppTemplateEditorView";
 
 type Props = {
   templates: WhatsAppTemplate[];
+  projects: Project[];
   loading: boolean;
   error: string | null;
   onRetry: () => void;
@@ -11,7 +12,15 @@ type Props = {
   onNew: () => void;
 };
 
-function TemplateCard({ template, onEdit }: { template: WhatsAppTemplate; onEdit: () => void }) {
+function TemplateCard({
+  template,
+  projectName,
+  onEdit
+}: {
+  template: WhatsAppTemplate;
+  projectName: string;
+  onEdit: () => void;
+}) {
   return (
     <article className="card flex flex-col gap-3 p-4">
       <div className="flex items-start justify-between gap-2">
@@ -24,6 +33,9 @@ function TemplateCard({ template, onEdit }: { template: WhatsAppTemplate; onEdit
             <span className="flex items-center gap-1">
               <Tag size={11} /> {template.category}
             </span>
+            <span className="flex items-center gap-1">
+              <FolderKanban size={11} /> {projectName}
+            </span>
           </div>
         </div>
         <button type="button" onClick={onEdit} className="btn-secondary px-3 py-1.5 text-xs">
@@ -35,7 +47,7 @@ function TemplateCard({ template, onEdit }: { template: WhatsAppTemplate; onEdit
   );
 }
 
-export default function WhatsAppTemplatesView({ templates, loading, error, onRetry, onEdit, onNew }: Props) {
+export default function WhatsAppTemplatesView({ templates, projects, loading, error, onRetry, onEdit, onNew }: Props) {
   function renderBody() {
     if (error) {
       return (
@@ -85,7 +97,12 @@ export default function WhatsAppTemplatesView({ templates, loading, error, onRet
     return (
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         {templates.map((t) => (
-          <TemplateCard key={t.id} template={t} onEdit={() => onEdit(t.id)} />
+          <TemplateCard
+            key={t.id}
+            template={t}
+            projectName={projects.find((p) => p.id === t.projectId)?.name ?? "General"}
+            onEdit={() => onEdit(t.id)}
+          />
         ))}
       </div>
     );

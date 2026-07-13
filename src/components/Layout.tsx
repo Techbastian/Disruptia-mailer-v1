@@ -1,5 +1,6 @@
 import { BarChart3, FolderKanban, LayoutTemplate, MailPlus, MessageSquareText, Send } from "lucide-react";
 import type { ReactNode } from "react";
+import { isDraftActive, useMailerStore } from "../store/useMailerStore";
 import type { AppView } from "../types";
 
 type LayoutProps = {
@@ -31,10 +32,12 @@ const activeFor: Partial<Record<AppView, AppView>> = {
 function NavButton({
   item,
   active,
+  badge,
   onClick
 }: {
   item: NavItem;
   active: boolean;
+  badge?: string;
   onClick: () => void;
 }) {
   const Icon = item.icon;
@@ -47,13 +50,23 @@ function NavButton({
       }`}
     >
       <Icon size={18} />
-      {item.label}
+      <span className="flex-1">{item.label}</span>
+      {badge && (
+        <span
+          className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+            active ? "bg-white/20 text-white" : "bg-warning/20 text-yellow-700"
+          }`}
+        >
+          {badge}
+        </span>
+      )}
     </button>
   );
 }
 
 export default function Layout({ view, onChangeView, children }: LayoutProps) {
   const activeId = activeFor[view] ?? view;
+  const hasDraft = useMailerStore((s) => isDraftActive(s.campaignDraft));
 
   return (
     <div className="min-h-screen bg-surface">
@@ -63,7 +76,13 @@ export default function Layout({ view, onChangeView, children }: LayoutProps) {
 
         <nav className="mt-8 space-y-1">
           {emailNav.map((item) => (
-            <NavButton key={item.id} item={item} active={activeId === item.id} onClick={() => onChangeView(item.id)} />
+            <NavButton
+              key={item.id}
+              item={item}
+              active={activeId === item.id}
+              badge={item.id === "campaign" && hasDraft ? "En edición" : undefined}
+              onClick={() => onChangeView(item.id)}
+            />
           ))}
         </nav>
 

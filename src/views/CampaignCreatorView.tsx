@@ -1,9 +1,11 @@
-import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, ChevronRight, Send } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, CheckCircle2, ChevronRight, FileSpreadsheet, Send, Trash2 } from "lucide-react";
 import FileDropzone from "../components/FileDropzone";
 import StatCard from "../components/StatCard";
+import StickyActions from "../components/StickyActions";
+import TestEmailBox from "../components/TestEmailBox";
 import { parseContactsFile, type InvalidRow } from "../lib/csv";
-import { sendCampaign, sendTestEmail } from "../lib/api";
+import { sendCampaign } from "../lib/api";
 import {
   addCampaignRecipients,
   createCampaign,
@@ -14,7 +16,10 @@ import {
   updateCampaignStatus
 } from "../lib/db";
 import { DAILY_EMAIL_LIMIT, getRemainingDailyQuota } from "../lib/dispatch";
+import { downloadEmailCampaignReport } from "../lib/report";
+import { downloadContactsExcelTemplate } from "../lib/excelTemplate";
 import { sanitizeHtml } from "../lib/sanitizeHtml";
+import { useMailerStore, isDraftActive } from "../store/useMailerStore";
 import type { CampaignHistoryItem, CampaignMetrics, ContactRecord, EmailTemplate } from "../types";
 
 type CampaignCreatorViewProps = {
@@ -29,8 +34,12 @@ function substituteVars(html: string, vars: Record<string, string>): string {
   });
 }
 
-// Toda prueba se envía siempre a este correo; los demás se agregan por envío.
-const DEFAULT_TEST_EMAIL = "sebastian.mojica@disruptia.co";
+const EMPTY_METRICS: CampaignMetrics = {
+  totalLoaded: 0,
+  validEmails: 0,
+  invalidEmails: 0,
+  duplicatesRemoved: 0
+};
 
 const STEP_LABELS = ["Destinatarios", "Estructura", "Contenido", "Confirmar"];
 
@@ -78,6 +87,7 @@ function Step1({
   metrics,
   columnNames,
   invalidRows,
+  contactsDropped,
   onFileLoaded,
   onNext
 }: {
@@ -85,6 +95,7 @@ function Step1({
   metrics: CampaignMetrics;
   columnNames: string[];
   invalidRows: InvalidRow[];
+  contactsDropped: boolean;
   onFileLoaded: (
     contacts: ContactRecord[],
     metrics: CampaignMetrics,
@@ -98,6 +109,16 @@ function Step1({
 
   return (
     <div className="space-y-6">
+      {contactsDropped && !hasContacts && (
+        <div className="flex items-start gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-yellow-600" />
+          <p className="text-sm text-yellow-800">
+            El borrador se recuperó, pero la lista de contactos era demasiado grande para guardarse en el navegador.
+            Volvé a subir el archivo; el resto de la campaña sigue como la dejaste.
+          </p>
+        </div>
+      )}
+
       <FileDropzone
         subtitle="Archivos CSV o XLSX — columnas esperadas: email, nombre, etc."
         onFile={async (file) => {
@@ -171,14 +192,15 @@ function Step1({
               </div>
             </details>
           )}
-
-          <div className="flex justify-end">
-            <button type="button" onClick={onNext} className="btn-primary">
-              Continuar con estructura →
-            </button>
-          </div>
         </>
       )}
+
+      <StickyActions>
+        <span />
+        <button type="button" onClick={onNext} disabled={!hasContacts} className="btn-primary disabled:opacity-40">
+          Continuar con estructura →
+        </button>
+      </StickyActions>
     </div>
   );
 }
@@ -264,6 +286,22 @@ function Step2({
         </div>
       )}
 
+      {selected && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/50 p-4">
+          <p className="text-sm text-text-muted">
+            ¿La lista todavía no existe? Descargá el Excel guía con las columnas que "{selected.name}" necesita.
+          </p>
+          <button
+            type="button"
+            onClick={() => downloadContactsExcelTemplate(selected)}
+            className="btn-secondary flex shrink-0 items-center gap-2 text-sm"
+          >
+            <FileSpreadsheet size={14} />
+            Descargar Excel guía
+          </button>
+        </div>
+      )}
+
       {missingColumns.length > 0 && (
         <div className="flex items-start gap-3 rounded-xl border border-error/40 bg-error/5 p-4">
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-error" />
@@ -278,14 +316,14 @@ function Step2({
         </div>
       )}
 
-      <div className="flex justify-between">
+      <StickyActions>
         <button type="button" onClick={onBack} className="btn-secondary">
           ← Volver
         </button>
         <button type="button" onClick={onNext} disabled={!canContinue} className="btn-primary disabled:opacity-40">
           Continuar con contenido →
         </button>
-      </div>
+      </StickyActions>
     </div>
   );
 }
@@ -353,14 +391,14 @@ function Step3({
         </div>
       )}
 
-      <div className="flex justify-between">
+      <StickyActions>
         <button type="button" onClick={onBack} className="btn-secondary">
           ← Volver
         </button>
         <button type="button" onClick={onNext} disabled={!canContinue} className="btn-primary disabled:opacity-40">
           Continuar a confirmar →
         </button>
-      </div>
+      </StickyActions>
     </div>
   );
 }
@@ -372,7 +410,9 @@ function Step4({
   contacts,
   subject,
   campaignVars,
+  title,
   sending,
+  onTitleChange,
   onBack,
   onConfirm
 }: {
@@ -380,16 +420,13 @@ function Step4({
   contacts: ContactRecord[];
   subject: string;
   campaignVars: Record<string, string>;
+  title: string;
   sending: boolean;
+  onTitleChange: (title: string) => void;
   onBack: () => void;
   onConfirm: (title: string) => Promise<void>;
 }) {
-  const [title, setTitle] = useState(subject);
   const [error, setError] = useState("");
-  const [extraTestEmails, setExtraTestEmails] = useState<string[]>([]);
-  const [newTestEmail, setNewTestEmail] = useState("");
-  const [testSending, setTestSending] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const previewHtml = useMemo(
     () => sanitizeHtml(substituteVars(template.html, campaignVars)),
@@ -397,43 +434,6 @@ function Step4({
   );
 
   const recipientCount = contacts.length;
-  const testEmails = [DEFAULT_TEST_EMAIL, ...extraTestEmails];
-
-  function handleAddTestEmail() {
-    const email = newTestEmail.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(email)) {
-      setTestResult({ ok: false, message: "Ingresá un correo válido para agregarlo a la prueba." });
-      return;
-    }
-    if (testEmails.includes(email)) {
-      setTestResult({ ok: false, message: "Ese correo ya está en la lista de prueba." });
-      return;
-    }
-    setExtraTestEmails((prev) => [...prev, email]);
-    setNewTestEmail("");
-    setTestResult(null);
-  }
-
-  async function handleSendTest() {
-    setTestSending(true);
-    setTestResult(null);
-    try {
-      await sendTestEmail({
-        html: previewHtml,
-        subject,
-        testEmails,
-        sampleContact: contacts[0] ?? null
-      });
-      setTestResult({
-        ok: true,
-        message: `Prueba enviada a ${testEmails.length} correo(s): ${testEmails.join(", ")}. Revisá la bandeja (y spam).`
-      });
-    } catch (err) {
-      setTestResult({ ok: false, message: err instanceof Error ? err.message : "No fue posible enviar la prueba." });
-    } finally {
-      setTestSending(false);
-    }
-  }
 
   async function handleSend() {
     if (!title.trim()) {
@@ -475,7 +475,7 @@ function Step4({
           <input
             className="input mt-2"
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => onTitleChange(e.target.value)}
             placeholder="ej. Citación entrevistas — Mayo 2026"
           />
         </div>
@@ -496,79 +496,17 @@ function Step4({
         />
       </article>
 
-      <article className="card space-y-3">
-        <div>
-          <p className="font-heading text-sm font-semibold">Correo de prueba</p>
-          <p className="mt-0.5 text-xs text-text-muted">
-            Recibí este correo antes de aprobar el envío masivo. Usa los datos del primer contacto del archivo para las
-            variables. No crea una campaña.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
-            {DEFAULT_TEST_EMAIL}
-            <span className="font-normal text-primary/60">· siempre</span>
-          </span>
-          {extraTestEmails.map((email) => (
-            <span
-              key={email}
-              className="flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-xs font-semibold"
-            >
-              {email}
-              <button
-                type="button"
-                onClick={() => setExtraTestEmails((prev) => prev.filter((e) => e !== email))}
-                disabled={testSending}
-                className="text-text-muted hover:text-error"
-                aria-label={`Quitar ${email} de la prueba`}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            type="email"
-            className="input flex-1 min-w-[240px]"
-            value={newTestEmail}
-            onChange={(e) => setNewTestEmail(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                handleAddTestEmail();
-              }
-            }}
-            placeholder="Agregar otro correo de la empresa…"
-            disabled={testSending}
-          />
-          <button
-            type="button"
-            onClick={handleAddTestEmail}
-            disabled={testSending || !newTestEmail.trim()}
-            className="btn-secondary disabled:opacity-40"
-          >
-            Agregar
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleSendTest()}
-            disabled={testSending || sending}
-            className="btn-primary disabled:opacity-40"
-          >
-            {testSending ? "Enviando prueba..." : `Enviar prueba (${testEmails.length})`}
-          </button>
-        </div>
-        {testResult && (
-          <p className={`text-sm ${testResult.ok ? "text-success" : "text-error"}`}>{testResult.message}</p>
-        )}
-      </article>
+      <TestEmailBox
+        getHtml={() => previewHtml}
+        subject={subject}
+        sampleContact={contacts[0] ?? null}
+        hint="Recibí este correo antes de aprobar el envío masivo. Usa los datos del primer contacto del archivo para las variables. No crea una campaña."
+        disabled={sending}
+      />
 
       {error && <p className="text-sm text-error">{error}</p>}
 
-      <div className="flex justify-between">
+      <StickyActions>
         <button type="button" onClick={onBack} disabled={sending} className="btn-secondary disabled:opacity-40">
           ← Volver
         </button>
@@ -581,7 +519,7 @@ function Step4({
           <Send size={15} />
           {sending ? "Enviando..." : `Aprobar y enviar a ${recipientCount} destinatarios`}
         </button>
-      </div>
+      </StickyActions>
     </div>
   );
 }
@@ -589,28 +527,30 @@ function Step4({
 // ── Main component ───────────────────────────────────────────────────────────
 
 export default function CampaignCreatorView({ templates, initialTemplateId, onCampaignCreated }: CampaignCreatorViewProps) {
-  const [step, setStep] = useState(1);
-  const [contacts, setContacts] = useState<ContactRecord[]>([]);
-  const [metrics, setMetrics] = useState<CampaignMetrics>({
-    totalLoaded: 0,
-    validEmails: 0,
-    invalidEmails: 0,
-    duplicatesRemoved: 0
-  });
-  const [columnNames, setColumnNames] = useState<string[]>([]);
-  const [invalidRows, setInvalidRows] = useState<InvalidRow[]>([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(initialTemplateId ?? null);
-  const [campaignVars, setCampaignVars] = useState<Record<string, string>>({});
-  const [subject, setSubject] = useState("");
-  const [sending, setSending] = useState(false);
+  const draft = useMailerStore((s) => s.campaignDraft);
+  const updateDraft = useMailerStore((s) => s.updateCampaignDraft);
+  const resetDraft = useMailerStore((s) => s.resetCampaignDraft);
 
-  const selectedTemplate = templates.find((t) => t.id === selectedTemplateId) ?? null;
+  const [sending, setSending] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+
+  // "Usar plantilla" desde otra vista: fija la plantilla si el borrador no tiene una.
+  useEffect(() => {
+    if (initialTemplateId && !draft.selectedTemplateId) {
+      updateDraft({ selectedTemplateId: initialTemplateId });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTemplateId]);
+
+  const selectedTemplate = templates.find((t) => t.id === draft.selectedTemplateId) ?? null;
+  const draftActive = isDraftActive(draft);
 
   async function handleConfirm(title: string) {
     if (!selectedTemplate) return;
     setSending(true);
     try {
-      const finalHtml = sanitizeHtml(substituteVars(selectedTemplate.html, campaignVars));
+      const finalHtml = sanitizeHtml(substituteVars(selectedTemplate.html, draft.campaignVars));
+      const contacts = draft.contacts;
 
       // Cupo diario GLOBAL (todas las campañas): el primer lote sale hasta
       // agotarlo; el resto queda pendiente para "Enviar lote" en el Dashboard.
@@ -619,43 +559,47 @@ export default function CampaignCreatorView({ templates, initialTemplateId, onCa
 
       const campaign = await createCampaign({
         title,
-        subject,
+        subject: draft.subject,
         prompt: "",
         htmlRaw: selectedTemplate.html,
         htmlSanitized: finalHtml,
         recipientCountEstimate: contacts.length,
         pendingCount: contacts.length,
-        validationMetrics: metrics
+        validationMetrics: draft.metrics,
+        projectId: selectedTemplate.projectId
       });
       await createCampaignRun(campaign.id);
       await addCampaignRecipients(campaign.id, contacts);
 
-      if (firstBatchSize === 0) {
-        // Sin cupo hoy: la campaña queda con todo pendiente, se despacha desde el Dashboard.
-        onCampaignCreated({ ...campaign, pendingCount: contacts.length });
-        return;
+      let remainingPending = contacts.length;
+      if (firstBatchSize > 0) {
+        const batch = await fetchPendingRecipients(campaign.id, firstBatchSize);
+        try {
+          await sendCampaign({
+            campaignId: campaign.id,
+            html: finalHtml,
+            subject: draft.subject,
+            contacts: batch.map((r) => r.contact)
+          });
+        } catch (err) {
+          // La campaña ya existe en Supabase: marcarla fallida evita zombies
+          // "en cola" y duplicados si el usuario reintenta. Los destinatarios
+          // quedan pending para reintentar desde el Dashboard.
+          await updateCampaignStatus(campaign.id, "failed").catch(() => undefined);
+          const detail = err instanceof Error ? err.message : String(err);
+          throw new Error(`El envío falló y la campaña quedó marcada como fallida. Detalle: ${detail}`);
+        }
+        await markRecipientsDispatched(batch.map((r) => r.id));
+        remainingPending = contacts.length - batch.length;
+        await setCampaignPendingCount(campaign.id, remainingPending);
       }
 
-      const batch = await fetchPendingRecipients(campaign.id, firstBatchSize);
-      try {
-        await sendCampaign({
-          campaignId: campaign.id,
-          html: finalHtml,
-          subject,
-          contacts: batch.map((r) => r.contact)
-        });
-      } catch (err) {
-        // La campaña ya existe en Supabase: marcarla fallida evita zombies
-        // "en cola" y duplicados si el usuario reintenta. Los destinatarios
-        // quedan pending para reintentar desde el Dashboard.
-        await updateCampaignStatus(campaign.id, "failed").catch(() => undefined);
-        const detail = err instanceof Error ? err.message : String(err);
-        throw new Error(`El envío falló y la campaña quedó marcada como fallida. Detalle: ${detail}`);
-      }
-      await markRecipientsDispatched(batch.map((r) => r.id));
-      const remainingPending = contacts.length - batch.length;
-      await setCampaignPendingCount(campaign.id, remainingPending);
+      // Reporte de evidencia: se descarga automáticamente tras cada envío.
+      await downloadEmailCampaignReport(campaign.id).catch((err) =>
+        console.error("No fue posible generar el reporte de evidencia:", err)
+      );
 
+      resetDraft();
       onCampaignCreated({ ...campaign, pendingCount: remainingPending });
     } finally {
       setSending(false);
@@ -664,63 +608,98 @@ export default function CampaignCreatorView({ templates, initialTemplateId, onCa
 
   return (
     <section className="space-y-6">
-      <div>
-        <h1 className="font-heading text-3xl font-bold">Creador de campaña</h1>
-        <p className="mt-2 text-sm text-text-muted">Seguí los pasos para configurar y enviar tu campaña.</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="font-heading text-3xl font-bold">Creador de campaña</h1>
+          <p className="mt-2 text-sm text-text-muted">
+            Seguí los pasos para configurar y enviar tu campaña. El avance se guarda solo: podés salir y volver.
+          </p>
+        </div>
+
+        {draftActive && !confirmCancel && (
+          <button
+            type="button"
+            onClick={() => setConfirmCancel(true)}
+            disabled={sending}
+            className="flex shrink-0 items-center gap-2 rounded-lg border border-error/40 px-3 py-2 text-sm font-semibold text-error hover:bg-error/5 disabled:opacity-40"
+          >
+            <Trash2 size={14} />
+            Cancelar campaña
+          </button>
+        )}
+        {confirmCancel && (
+          <div className="flex shrink-0 items-center gap-2 rounded-lg border border-error/40 bg-error/5 p-2">
+            <span className="text-sm font-semibold text-error">¿Descartar el borrador?</span>
+            <button
+              type="button"
+              onClick={() => {
+                resetDraft();
+                setConfirmCancel(false);
+              }}
+              className="rounded-lg bg-error px-3 py-1.5 text-xs font-semibold text-white"
+            >
+              Sí, descartar
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmCancel(false)}
+              className="rounded-lg border border-border px-3 py-1.5 text-xs font-semibold hover:bg-surface"
+            >
+              Seguir editando
+            </button>
+          </div>
+        )}
       </div>
 
-      <StepBar current={step} />
+      <StepBar current={draft.step} />
 
-      {step === 1 && (
+      {draft.step === 1 && (
         <Step1
-          contacts={contacts}
-          metrics={metrics}
-          columnNames={columnNames}
-          invalidRows={invalidRows}
+          contacts={draft.contacts}
+          metrics={draft.metrics ?? EMPTY_METRICS}
+          columnNames={draft.columnNames}
+          invalidRows={draft.invalidRows}
+          contactsDropped={draft.contactsDropped}
           onFileLoaded={(c, m, cols, inv) => {
-            setContacts(c);
-            setMetrics(m);
-            setColumnNames(cols);
-            setInvalidRows(inv);
+            updateDraft({ contacts: c, metrics: m, columnNames: cols, invalidRows: inv, contactsDropped: false });
           }}
-          onNext={() => setStep(2)}
+          onNext={() => updateDraft({ step: 2 })}
         />
       )}
 
-      {step === 2 && (
+      {draft.step === 2 && (
         <Step2
           templates={templates}
-          selectedId={selectedTemplateId}
-          columnNames={columnNames}
-          onSelect={setSelectedTemplateId}
-          onNext={() => {
-            setCampaignVars({});
-            setStep(3);
-          }}
-          onBack={() => setStep(1)}
+          selectedId={draft.selectedTemplateId}
+          columnNames={draft.columnNames}
+          onSelect={(id) => updateDraft({ selectedTemplateId: id })}
+          onNext={() => updateDraft({ step: 3, campaignVars: {} })}
+          onBack={() => updateDraft({ step: 1 })}
         />
       )}
 
-      {step === 3 && selectedTemplate && (
+      {draft.step === 3 && selectedTemplate && (
         <Step3
           template={selectedTemplate}
-          campaignVars={campaignVars}
-          subject={subject}
-          onVarsChange={setCampaignVars}
-          onSubjectChange={setSubject}
-          onNext={() => setStep(4)}
-          onBack={() => setStep(2)}
+          campaignVars={draft.campaignVars}
+          subject={draft.subject}
+          onVarsChange={(campaignVars) => updateDraft({ campaignVars })}
+          onSubjectChange={(subject) => updateDraft({ subject })}
+          onNext={() => updateDraft({ step: 4, title: draft.title || draft.subject })}
+          onBack={() => updateDraft({ step: 2 })}
         />
       )}
 
-      {step === 4 && selectedTemplate && (
+      {draft.step === 4 && selectedTemplate && (
         <Step4
           template={selectedTemplate}
-          contacts={contacts}
-          subject={subject}
-          campaignVars={campaignVars}
+          contacts={draft.contacts}
+          subject={draft.subject}
+          campaignVars={draft.campaignVars}
+          title={draft.title}
           sending={sending}
-          onBack={() => setStep(3)}
+          onTitleChange={(title) => updateDraft({ title })}
+          onBack={() => updateDraft({ step: 3 })}
           onConfirm={handleConfirm}
         />
       )}

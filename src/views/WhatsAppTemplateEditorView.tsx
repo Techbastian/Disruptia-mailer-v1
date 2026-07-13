@@ -1,10 +1,12 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle, ArrowLeft, Plus, Save, Trash2, X } from "lucide-react";
 import { deleteWhatsAppTemplate, saveWhatsAppTemplate } from "../lib/db";
-import type { WhatsAppButton, WhatsAppButtonType, WhatsAppCategory, WhatsAppTemplate } from "../types";
+import StickyActions from "../components/StickyActions";
+import type { Project, WhatsAppButton, WhatsAppButtonType, WhatsAppCategory, WhatsAppTemplate } from "../types";
 
 type Props = {
   initialTemplate: WhatsAppTemplate | null;
+  projects: Project[];
   onSaved: (template: WhatsAppTemplate) => void;
   onDeleted: () => void;
   onCancel: () => void;
@@ -50,7 +52,7 @@ export function WhatsAppPreview({ template }: { template: WhatsAppTemplate }) {
   );
 }
 
-export default function WhatsAppTemplateEditorView({ initialTemplate, onSaved, onDeleted, onCancel }: Props) {
+export default function WhatsAppTemplateEditorView({ initialTemplate, projects, onSaved, onDeleted, onCancel }: Props) {
   const isEditing = initialTemplate !== null;
 
   const [name, setName] = useState(initialTemplate?.name ?? "");
@@ -60,6 +62,7 @@ export default function WhatsAppTemplateEditorView({ initialTemplate, onSaved, o
   const [bodyText, setBodyText] = useState(initialTemplate?.bodyText ?? "");
   const [footerText, setFooterText] = useState(initialTemplate?.footerText ?? "");
   const [buttons, setButtons] = useState<WhatsAppButton[]>(initialTemplate?.buttons ?? []);
+  const [projectId, setProjectId] = useState<string | null>(initialTemplate?.projectId ?? null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -76,6 +79,7 @@ export default function WhatsAppTemplateEditorView({ initialTemplate, onSaved, o
     bodyText,
     footerText,
     buttons,
+    projectId,
     createdAt: initialTemplate?.createdAt ?? "",
     updatedAt: initialTemplate?.updatedAt ?? ""
   };
@@ -109,7 +113,8 @@ export default function WhatsAppTemplateEditorView({ initialTemplate, onSaved, o
         headerText: headerText.trim(),
         bodyText,
         footerText: footerText.trim(),
-        buttons: buttons.filter((b) => b.text.trim())
+        buttons: buttons.filter((b) => b.text.trim()),
+        projectId
       });
       onSaved(result);
     } catch (caught) {
@@ -186,6 +191,24 @@ export default function WhatsAppTemplateEditorView({ initialTemplate, onSaved, o
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="col-span-2">
+              <label className="block text-sm font-semibold">Proyecto</label>
+              <select
+                className="input mt-1.5"
+                value={projectId ?? ""}
+                onChange={(e) => setProjectId(e.target.value || null)}
+              >
+                <option value="">General (todos los proyectos)</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-text-muted">
+                Los envíos hechos con esta plantilla quedan atribuidos a este proyecto en el historial.
+              </p>
             </div>
           </article>
 
@@ -276,15 +299,6 @@ export default function WhatsAppTemplateEditorView({ initialTemplate, onSaved, o
 
           <div className="space-y-2">
             {error && <p className="text-sm text-error">{error}</p>}
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving}
-              className="btn-primary flex w-full items-center justify-center gap-2"
-            >
-              <Save size={15} />
-              {saving ? "Guardando..." : "Guardar plantilla"}
-            </button>
 
             {isEditing && !confirmDelete && (
               <button
@@ -333,6 +347,22 @@ export default function WhatsAppTemplateEditorView({ initialTemplate, onSaved, o
           </p>
         </div>
       </div>
+
+      <StickyActions>
+        <button type="button" onClick={onCancel} className="btn-secondary flex items-center gap-2">
+          <ArrowLeft size={15} />
+          Volver
+        </button>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          className="btn-primary flex items-center gap-2 disabled:opacity-40"
+        >
+          <Save size={15} />
+          {saving ? "Guardando..." : "Guardar plantilla"}
+        </button>
+      </StickyActions>
     </section>
   );
 }

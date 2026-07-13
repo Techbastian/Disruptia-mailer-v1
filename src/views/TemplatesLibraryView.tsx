@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, Clock, FilePlus, FolderKanban, Pencil, RefreshCw, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Clock, FilePlus, FileSpreadsheet, FolderKanban, Pencil, RefreshCw, Sparkles, X } from "lucide-react";
 import type { AssetItem, EmailTemplate, Project } from "../types";
 import { sanitizeHtml } from "../lib/sanitizeHtml";
 import { generateTemplateHtml, pickBaseTemplate } from "../lib/ai";
+import { downloadContactsExcelTemplate } from "../lib/excelTemplate";
 
 type TemplatesLibraryViewProps = {
   templates: EmailTemplate[];
@@ -92,6 +93,15 @@ function TemplateModal({
                 ))}
               </select>
             </label>
+            <button
+              type="button"
+              onClick={() => downloadContactsExcelTemplate(template)}
+              className="btn-secondary flex items-center gap-2 text-sm"
+              title="Excel con las columnas que esta plantilla necesita (email, nombre y sus variables)"
+            >
+              <FileSpreadsheet size={14} />
+              Excel guía
+            </button>
             <button
               type="button"
               onClick={onEdit}

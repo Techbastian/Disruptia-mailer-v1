@@ -39,6 +39,9 @@ export type CampaignHistoryItem = {
   pendingCount: number;
   status: "draft" | "queued" | "sent" | "failed";
   validationMetrics: CampaignMetrics | null;
+  // Heredado de la plantilla usada (null = General).
+  projectId: string | null;
+  projectName: string | null;
 };
 
 export type Project = {
@@ -75,6 +78,9 @@ export type WhatsAppCampaignItem = {
   status: "queued" | "sent" | "failed";
   validationMetrics: WhatsAppCampaignMetrics | null;
   createdAt: string;
+  // Heredado de la plantilla usada (null = General).
+  projectId: string | null;
+  projectName: string | null;
 };
 
 export type WhatsAppButtonType = "QUICK_REPLY" | "URL" | "PHONE_NUMBER";
@@ -96,6 +102,7 @@ export type WhatsAppTemplate = {
   bodyText: string; // cuerpo con variables {{1}} {{2}}
   footerText: string;
   buttons: WhatsAppButton[];
+  projectId: string | null; // null = General
   createdAt: string;
   updatedAt: string;
 };

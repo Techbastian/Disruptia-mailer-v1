@@ -1,7 +1,8 @@
-import { useState } from "react";
-import { RefreshCw, Send, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
+import { FileText, RefreshCw, Send, Trash2 } from "lucide-react";
 import type { CampaignHistoryItem, WhatsAppCampaignItem } from "../types";
 import type { DispatchResult } from "../lib/dispatch";
+import { downloadEmailCampaignReport, downloadWhatsAppCampaignReport } from "../lib/report";
 
 type DashboardViewProps = {
   campaigns: CampaignHistoryItem[];
@@ -71,6 +72,48 @@ export default function DashboardView({
   const [refreshing, setRefreshing] = useState(false);
   const [dispatchingId, setDispatchingId] = useState<string | null>(null);
   const [batchMsg, setBatchMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [reportingId, setReportingId] = useState<string | null>(null);
+
+  async function handleDownloadReport(id: string, channel: "email" | "whatsapp") {
+    setReportingId(id);
+    try {
+      if (channel === "email") {
+        await downloadEmailCampaignReport(id);
+      } else {
+        const campaign = whatsappCampaigns.find((c) => c.id === id);
+        if (campaign) await downloadWhatsAppCampaignReport(campaign);
+      }
+    } catch (err) {
+      console.error("No fue posible generar el reporte:", err);
+      setBatchMsg({ ok: false, text: "No fue posible generar el reporte de evidencia." });
+    } finally {
+      setReportingId(null);
+    }
+  }
+
+  // Comunicaciones agrupadas por proyecto (null = General), ambos canales.
+  const projectSummary = useMemo(() => {
+    const groups = new Map<
+      string,
+      { emailCampaigns: number; emails: number; waCampaigns: number; waMessages: number }
+    >();
+    const groupOf = (name: string | null) => {
+      const key = name ?? "General";
+      if (!groups.has(key)) groups.set(key, { emailCampaigns: 0, emails: 0, waCampaigns: 0, waMessages: 0 });
+      return groups.get(key)!;
+    };
+    for (const c of campaigns) {
+      const g = groupOf(c.projectName);
+      g.emailCampaigns += 1;
+      g.emails += c.recipients;
+    }
+    for (const c of whatsappCampaigns) {
+      const g = groupOf(c.projectName);
+      g.waCampaigns += 1;
+      g.waMessages += c.recipients;
+    }
+    return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [campaigns, whatsappCampaigns]);
 
   async function handleDispatchBatch(id: string) {
     setDispatchingId(id);
@@ -152,6 +195,38 @@ export default function DashboardView({
         </article>
       </div>
 
+      {projectSummary.length > 0 && (
+        <article className="card overflow-hidden p-0">
+          <header className="border-b border-border px-6 py-4">
+            <h2 className="font-heading text-xl font-semibold">Comunicaciones por proyecto</h2>
+          </header>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead className="bg-surface text-text-muted">
+                <tr>
+                  <th className="px-6 py-3">Proyecto</th>
+                  <th className="px-6 py-3">Campañas email</th>
+                  <th className="px-6 py-3">Correos</th>
+                  <th className="px-6 py-3">Envíos WhatsApp</th>
+                  <th className="px-6 py-3">Mensajes WhatsApp</th>
+                </tr>
+              </thead>
+              <tbody>
+                {projectSummary.map(([name, g]) => (
+                  <tr key={name} className="border-t border-border">
+                    <td className="px-6 py-3 font-medium">{name}</td>
+                    <td className="px-6 py-3">{g.emailCampaigns}</td>
+                    <td className="px-6 py-3">{g.emails}</td>
+                    <td className="px-6 py-3">{g.waCampaigns}</td>
+                    <td className="px-6 py-3">{g.waMessages}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      )}
+
       <article className="card overflow-hidden p-0">
         <header className="border-b border-border px-6 py-4">
           <h2 className="font-heading text-xl font-semibold">Campañas recientes</h2>
@@ -161,6 +236,7 @@ export default function DashboardView({
             <thead className="bg-surface text-text-muted">
               <tr>
                 <th className="px-6 py-3">Título</th>
+                <th className="px-6 py-3">Proyecto</th>
                 <th className="px-6 py-3">Fecha</th>
                 <th className="px-6 py-3">Destinatarios</th>
                 <th className="px-6 py-3">Pendientes</th>
@@ -172,7 +248,7 @@ export default function DashboardView({
             <tbody>
               {campaigns.length === 0 ? (
                 <tr>
-                  <td className="px-6 py-8 text-text-muted" colSpan={7}>
+                  <td className="px-6 py-8 text-text-muted" colSpan={8}>
                     Aún no hay campañas registradas.
                   </td>
                 </tr>
@@ -180,6 +256,7 @@ export default function DashboardView({
                 campaigns.map((campaign) => (
                   <tr key={campaign.id} className="border-t border-border">
                     <td className="px-6 py-4 font-medium">{campaign.title}</td>
+                    <td className="px-6 py-4 text-text-muted">{campaign.projectName ?? "General"}</td>
                     <td className="px-6 py-4 text-text-muted">
                       {new Date(campaign.createdAt).toLocaleString("es-CO")}
                     </td>
@@ -234,14 +311,26 @@ export default function DashboardView({
                           </button>
                         </div>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => setConfirmId(campaign.id)}
-                          className="rounded-lg p-1.5 text-text-muted hover:bg-error/10 hover:text-error transition-colors"
-                          aria-label="Eliminar campaña"
-                        >
-                          <Trash2 size={15} />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => void handleDownloadReport(campaign.id, "email")}
+                            disabled={reportingId === campaign.id}
+                            className="rounded-lg p-1.5 text-text-muted hover:bg-primary/10 hover:text-primary transition-colors disabled:opacity-50"
+                            aria-label="Descargar reporte de evidencia"
+                            title="Descargar reporte de evidencia (.txt)"
+                          >
+                            <FileText size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmId(campaign.id)}
+                            className="rounded-lg p-1.5 text-text-muted hover:bg-error/10 hover:text-error transition-colors"
+                            aria-label="Eliminar campaña"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -266,6 +355,7 @@ export default function DashboardView({
             <thead className="bg-surface text-text-muted">
               <tr>
                 <th className="px-6 py-3">Plantilla</th>
+                <th className="px-6 py-3">Proyecto</th>
                 <th className="px-6 py-3">Fecha</th>
                 <th className="px-6 py-3">Destinatarios</th>
                 <th className="px-6 py-3">Calidad de datos</th>
@@ -276,7 +366,7 @@ export default function DashboardView({
             <tbody>
               {whatsappCampaigns.length === 0 ? (
                 <tr>
-                  <td className="px-6 py-8 text-text-muted" colSpan={6}>
+                  <td className="px-6 py-8 text-text-muted" colSpan={7}>
                     Aún no hay envíos de WhatsApp registrados.
                   </td>
                 </tr>
@@ -287,6 +377,7 @@ export default function DashboardView({
                       {campaign.templateName}{" "}
                       <span className="text-xs text-text-muted">({campaign.templateLanguage})</span>
                     </td>
+                    <td className="px-6 py-4 text-text-muted">{campaign.projectName ?? "General"}</td>
                     <td className="px-6 py-4 text-text-muted">
                       {new Date(campaign.createdAt).toLocaleString("es-CO")}
                     </td>
@@ -317,14 +408,26 @@ export default function DashboardView({
                           </button>
                         </div>
                       ) : (
-                        <button
-                          type="button"
-                          onClick={() => setConfirmId(campaign.id)}
-                          className="rounded-lg p-1.5 text-text-muted hover:bg-error/10 hover:text-error transition-colors"
-                          aria-label="Eliminar envío"
-                        >
-                          <Trash2 size={15} />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => void handleDownloadReport(campaign.id, "whatsapp")}
+                            disabled={reportingId === campaign.id}
+                            className="rounded-lg p-1.5 text-text-muted hover:bg-primary/10 hover:text-primary transition-colors disabled:opacity-50"
+                            aria-label="Descargar reporte de evidencia"
+                            title="Descargar reporte de evidencia (.txt)"
+                          >
+                            <FileText size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmId(campaign.id)}
+                            className="rounded-lg p-1.5 text-text-muted hover:bg-error/10 hover:text-error transition-colors"
+                            aria-label="Eliminar envío"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>

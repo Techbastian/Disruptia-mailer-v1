@@ -274,6 +274,7 @@ export default function App() {
       {currentView === "whatsapp-templates" && (
         <WhatsAppTemplatesView
           templates={whatsappTemplates}
+          projects={projects}
           loading={waLoading}
           error={waError}
           onRetry={() => setWaRetry((n) => n + 1)}
@@ -291,6 +292,7 @@ export default function App() {
         <WhatsAppTemplateEditorView
           key={selectedWhatsAppTemplateId ?? "new"}
           initialTemplate={whatsappTemplates.find((t) => t.id === selectedWhatsAppTemplateId) ?? null}
+          projects={projects}
           onSaved={(template) => {
             if (selectedWhatsAppTemplateId) {
               updateWhatsappTemplate(template);

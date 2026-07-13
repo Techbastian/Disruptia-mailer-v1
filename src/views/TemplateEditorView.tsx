@@ -3,6 +3,8 @@ import { AlertTriangle, ArrowLeft, Check, Plus, Save, Sparkles, Trash2, X } from
 import { deleteTemplate, saveTemplate } from "../lib/db";
 import { generateTemplateHtml, pickBaseTemplate } from "../lib/ai";
 import { sanitizeHtml } from "../lib/sanitizeHtml";
+import StickyActions from "../components/StickyActions";
+import TestEmailBox from "../components/TestEmailBox";
 import type { AssetItem, EmailTemplate, Project } from "../types";
 
 type TemplateEditorViewProps = {
@@ -406,16 +408,6 @@ export default function TemplateEditorView({
           <div className="space-y-2">
             {error && <p className="text-sm text-error">{error}</p>}
 
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving}
-              className="btn-primary flex w-full items-center justify-center gap-2"
-            >
-              <Save size={15} />
-              {saving ? "Guardando..." : "Guardar plantilla"}
-            </button>
-
             {isEditing && !confirmDelete && (
               <button
                 type="button"
@@ -558,8 +550,35 @@ export default function TemplateEditorView({
               className="h-[600px] w-full rounded-xl border border-border bg-white"
             />
           </article>
+
+          <TestEmailBox
+            getHtml={() => sanitizeHtml(html)}
+            subject={name.trim() || "Plantilla sin nombre"}
+            hint="Probá cómo se ve la plantilla en una bandeja real antes de guardarla. Las variables llegan como tokens {{...}}."
+            disabled={!html.trim()}
+          />
         </div>
       </div>
+
+      <StickyActions>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="btn-secondary flex items-center gap-2"
+        >
+          <ArrowLeft size={15} />
+          Volver
+        </button>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          className="btn-primary flex items-center gap-2 disabled:opacity-40"
+        >
+          <Save size={15} />
+          {saving ? "Guardando..." : "Guardar plantilla"}
+        </button>
+      </StickyActions>
     </section>
   );
 }

@@ -1,13 +1,82 @@
 import { create } from "zustand";
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import type {
   AppView,
   AssetItem,
   CampaignHistoryItem,
+  CampaignMetrics,
+  ContactRecord,
   EmailTemplate,
   Project,
   WhatsAppCampaignItem,
   WhatsAppTemplate
 } from "../types";
+import type { InvalidRow } from "../lib/csv";
+
+// ── Borrador de campaña en edición ────────────────────────────────────────────
+// Vive en el store (navegar entre pantallas no lo pierde) y se persiste en
+// localStorage (recargar la pestaña tampoco). Se limpia al enviar o cancelar.
+
+export type CampaignDraft = {
+  step: number;
+  contacts: ContactRecord[];
+  metrics: CampaignMetrics | null;
+  columnNames: string[];
+  invalidRows: InvalidRow[];
+  selectedTemplateId: string | null;
+  campaignVars: Record<string, string>;
+  subject: string;
+  title: string;
+  // true si la lista era muy grande para localStorage y no sobrevivió la recarga.
+  contactsDropped: boolean;
+};
+
+export const EMPTY_CAMPAIGN_DRAFT: CampaignDraft = {
+  step: 1,
+  contacts: [],
+  metrics: null,
+  columnNames: [],
+  invalidRows: [],
+  selectedTemplateId: null,
+  campaignVars: {},
+  subject: "",
+  title: "",
+  contactsDropped: false
+};
+
+export function isDraftActive(draft: CampaignDraft): boolean {
+  return (
+    draft.contacts.length > 0 ||
+    draft.contactsDropped ||
+    draft.selectedTemplateId !== null ||
+    draft.subject.trim() !== "" ||
+    draft.title.trim() !== ""
+  );
+}
+
+// localStorage con guard de cuota: si la lista de contactos no cabe, se
+// persiste el borrador sin la lista (contactsDropped avisa al usuario).
+const draftStorage: StateStorage = {
+  getItem: (key) => localStorage.getItem(key),
+  setItem: (key, value) => {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      try {
+        const parsed = JSON.parse(value);
+        const draft = parsed?.state?.campaignDraft;
+        if (draft && Array.isArray(draft.contacts) && draft.contacts.length > 0) {
+          draft.contacts = [];
+          draft.contactsDropped = true;
+          localStorage.setItem(key, JSON.stringify(parsed));
+        }
+      } catch {
+        // Sin espacio ni siquiera para el borrador liviano: no persiste.
+      }
+    }
+  },
+  removeItem: (key) => localStorage.removeItem(key)
+};
 
 type MailerState = {
   currentView: AppView;
@@ -17,6 +86,7 @@ type MailerState = {
   projects: Project[];
   whatsappTemplates: WhatsAppTemplate[];
   whatsappCampaigns: WhatsAppCampaignItem[];
+  campaignDraft: CampaignDraft;
   selectedTemplateId: string | null;
   selectedWhatsAppTemplateId: string | null;
   setCurrentView: (view: AppView) => void;
@@ -40,11 +110,15 @@ type MailerState = {
   setWhatsappCampaigns: (campaigns: WhatsAppCampaignItem[]) => void;
   addWhatsappCampaign: (campaign: WhatsAppCampaignItem) => void;
   removeWhatsappCampaign: (id: string) => void;
+  updateCampaignDraft: (patch: Partial<CampaignDraft>) => void;
+  resetCampaignDraft: () => void;
   setSelectedTemplateId: (id: string | null) => void;
   setSelectedWhatsAppTemplateId: (id: string | null) => void;
 };
 
-export const useMailerStore = create<MailerState>((set) => ({
+export const useMailerStore = create<MailerState>()(
+  persist(
+    (set) => ({
   currentView: "dashboard",
   assets: [],
   campaigns: [],
@@ -52,6 +126,7 @@ export const useMailerStore = create<MailerState>((set) => ({
   projects: [],
   whatsappTemplates: [],
   whatsappCampaigns: [],
+  campaignDraft: EMPTY_CAMPAIGN_DRAFT,
   selectedTemplateId: null,
   selectedWhatsAppTemplateId: null,
   setCurrentView: (currentView) => set({ currentView }),
@@ -89,6 +164,17 @@ export const useMailerStore = create<MailerState>((set) => ({
     set((state) => ({ whatsappCampaigns: [campaign, ...state.whatsappCampaigns] })),
   removeWhatsappCampaign: (id) =>
     set((state) => ({ whatsappCampaigns: state.whatsappCampaigns.filter((c) => c.id !== id) })),
+  updateCampaignDraft: (patch) =>
+    set((state) => ({ campaignDraft: { ...state.campaignDraft, ...patch } })),
+  resetCampaignDraft: () => set({ campaignDraft: EMPTY_CAMPAIGN_DRAFT }),
   setSelectedTemplateId: (selectedTemplateId) => set({ selectedTemplateId }),
   setSelectedWhatsAppTemplateId: (selectedWhatsAppTemplateId) => set({ selectedWhatsAppTemplateId })
-}));
+    }),
+    {
+      name: "disruptia-mailer-draft",
+      storage: createJSONStorage(() => draftStorage),
+      // Solo el borrador de campaña se persiste; el resto se recarga de Supabase.
+      partialize: (state) => ({ campaignDraft: state.campaignDraft })
+    }
+  )
+);

@@ -11,7 +11,9 @@ import {
   type WhatsAppMetrics
 } from "../lib/whatsappCsv";
 import { hasWhatsAppWebhookConfig, sendWhatsAppCampaign, sendWhatsAppTest, type WhatsAppRecipient } from "../lib/api";
-import { createWhatsAppCampaign, updateWhatsAppCampaignStatus } from "../lib/db";
+import { addWhatsAppCampaignRecipients, createWhatsAppCampaign, updateWhatsAppCampaignStatus } from "../lib/db";
+import { downloadWhatsAppCampaignReport } from "../lib/report";
+import StickyActions from "../components/StickyActions";
 import { extractWaVars, WhatsAppPreview } from "./WhatsAppTemplateEditorView";
 
 type Props = {
@@ -177,7 +179,9 @@ export default function WhatsAppSendView({ templates, onManageTemplates, onCampa
         templateName: template.name,
         templateLanguage: template.language,
         recipientCount: recipients.length,
-        validationMetrics: metrics
+        validationMetrics: metrics,
+        // El envío hereda el proyecto de la plantilla usada.
+        projectId: template.projectId
       });
 
       try {
@@ -191,6 +195,15 @@ export default function WhatsAppSendView({ templates, onManageTemplates, onCampa
         await updateWhatsAppCampaignStatus(campaign.id, "failed").catch(() => undefined);
         throw webhookError;
       }
+
+      // Evidencias: guardar los destinatarios y descargar el reporte del envío.
+      await addWhatsAppCampaignRecipients(
+        campaign.id,
+        recipients.map((r) => ({ phone: r.phone, variables: r.variables }))
+      ).catch((err) => console.error("No fue posible guardar los destinatarios del envío:", err));
+      await downloadWhatsAppCampaignReport(campaign).catch((err) =>
+        console.error("No fue posible generar el reporte de evidencia:", err)
+      );
 
       onCampaignCreated(campaign);
     } catch (err) {
@@ -426,18 +439,20 @@ export default function WhatsAppSendView({ templates, onManageTemplates, onCampa
           </article>
 
           {/* Envío real */}
-          <article className="card space-y-3">
-            <p className="font-heading font-semibold">Confirmar envío</p>
-            {!mappingComplete && vars.length > 0 && (
-              <p className="text-sm text-text-muted">
-                Completá el mapeo de todas las variables (y subí un archivo si usás columnas) para habilitar el envío.
-              </p>
-            )}
+          {sendResult && !sendResult.ok && <p className="text-sm text-error">{sendResult.message}</p>}
+          <StickyActions>
+            <p className="text-sm text-text-muted">
+              {!mappingComplete && vars.length > 0
+                ? "Completá el mapeo de todas las variables (y subí un archivo si usás columnas) para habilitar el envío."
+                : `Listo para enviar a ${contacts.length} destinatario(s) — proyecto: ${
+                    template.projectId ? "el de la plantilla" : "General"
+                  }.`}
+            </p>
             <button
               type="button"
               onClick={() => void handleSendReal()}
               disabled={!canSendReal || sending || testSending}
-              className="btn-primary flex w-full items-center justify-center gap-2 disabled:opacity-40"
+              className="btn-primary flex shrink-0 items-center gap-2 disabled:opacity-40"
             >
               {sending ? (
                 <>
@@ -451,8 +466,7 @@ export default function WhatsAppSendView({ templates, onManageTemplates, onCampa
                 </>
               )}
             </button>
-            {sendResult && !sendResult.ok && <p className="text-sm text-error">{sendResult.message}</p>}
-          </article>
+          </StickyActions>
         </>
       )}
     </section>

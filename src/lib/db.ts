@@ -19,6 +19,7 @@ type CreateCampaignInput = {
   recipientCountEstimate: number;
   pendingCount: number;
   validationMetrics: CampaignMetrics | null;
+  projectId: string | null;
 };
 
 function ensureSupabase() {
@@ -28,7 +29,14 @@ function ensureSupabase() {
   return supabase;
 }
 
-const CAMPAIGN_SELECT = "id,title,status,recipient_count_estimate,pending_count,validation_metrics,created_at";
+const CAMPAIGN_SELECT =
+  "id,title,status,recipient_count_estimate,pending_count,validation_metrics,project_id,projects(name),created_at";
+
+// PostgREST embebe la FK como objeto: projects: { name } | null.
+function embeddedProjectName(row: Record<string, unknown>): string | null {
+  const project = row.projects as { name?: string } | null;
+  return project?.name ?? null;
+}
 
 function rowToCampaign(row: Record<string, unknown>): CampaignHistoryItem {
   return {
@@ -38,6 +46,8 @@ function rowToCampaign(row: Record<string, unknown>): CampaignHistoryItem {
     recipients: (row.recipient_count_estimate as number) ?? 0,
     pendingCount: (row.pending_count as number) ?? 0,
     validationMetrics: (row.validation_metrics as CampaignHistoryItem["validationMetrics"]) ?? null,
+    projectId: (row.project_id as string | null) ?? null,
+    projectName: embeddedProjectName(row),
     createdAt: row.created_at as string
   };
 }
@@ -68,6 +78,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Campai
       recipient_count_estimate: input.recipientCountEstimate,
       pending_count: input.pendingCount,
       validation_metrics: input.validationMetrics,
+      project_id: input.projectId,
       created_by: DEFAULT_ACTOR_ID
     })
     .select(CAMPAIGN_SELECT)
@@ -354,7 +365,7 @@ export async function deleteProject(id: string): Promise<void> {
 // ── WhatsApp templates ─────────────────────────────────────────────────────────
 
 const WA_TEMPLATE_SELECT =
-  "id,name,language,category,header_text,body_text,footer_text,buttons,created_at,updated_at";
+  "id,name,language,category,header_text,body_text,footer_text,buttons,project_id,created_at,updated_at";
 
 function rowToWhatsAppTemplate(row: Record<string, unknown>): WhatsAppTemplate {
   return {
@@ -366,6 +377,7 @@ function rowToWhatsAppTemplate(row: Record<string, unknown>): WhatsAppTemplate {
     bodyText: (row.body_text as string) ?? "",
     footerText: (row.footer_text as string) ?? "",
     buttons: (row.buttons as WhatsAppTemplate["buttons"]) ?? [],
+    projectId: (row.project_id as string | null) ?? null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string
   };
@@ -395,6 +407,7 @@ export async function saveWhatsAppTemplate(input: SaveWhatsAppTemplateInput): Pr
     body_text: input.bodyText,
     footer_text: input.footerText,
     buttons: input.buttons,
+    project_id: input.projectId ?? null,
     updated_at: new Date().toISOString()
   };
 
@@ -426,7 +439,8 @@ export async function deleteWhatsAppTemplate(id: string): Promise<void> {
 
 // ── WhatsApp campaigns (historial de envíos) ──────────────────────────────────
 
-const WA_CAMPAIGN_SELECT = "id,template_name,template_language,recipient_count,status,validation_metrics,created_at";
+const WA_CAMPAIGN_SELECT =
+  "id,template_name,template_language,recipient_count,status,validation_metrics,project_id,projects(name),created_at";
 
 function rowToWhatsAppCampaign(row: Record<string, unknown>): WhatsAppCampaignItem {
   return {
@@ -436,6 +450,8 @@ function rowToWhatsAppCampaign(row: Record<string, unknown>): WhatsAppCampaignIt
     recipients: (row.recipient_count as number) ?? 0,
     status: row.status as WhatsAppCampaignItem["status"],
     validationMetrics: (row.validation_metrics as WhatsAppCampaignItem["validationMetrics"]) ?? null,
+    projectId: (row.project_id as string | null) ?? null,
+    projectName: embeddedProjectName(row),
     createdAt: row.created_at as string
   };
 }
@@ -456,6 +472,7 @@ export type CreateWhatsAppCampaignInput = {
   templateLanguage: string;
   recipientCount: number;
   validationMetrics: WhatsAppCampaignItem["validationMetrics"];
+  projectId: string | null;
 };
 
 export async function createWhatsAppCampaign(input: CreateWhatsAppCampaignInput): Promise<WhatsAppCampaignItem> {
@@ -468,6 +485,7 @@ export async function createWhatsAppCampaign(input: CreateWhatsAppCampaignInput)
       recipient_count: input.recipientCount,
       status: "queued",
       validation_metrics: input.validationMetrics,
+      project_id: input.projectId,
       created_by: DEFAULT_ACTOR_ID
     })
     .select(WA_CAMPAIGN_SELECT)
@@ -487,8 +505,127 @@ export async function updateWhatsAppCampaignStatus(
 
 export async function deleteWhatsAppCampaign(id: string): Promise<void> {
   const client = ensureSupabase();
+  // Los destinatarios caen por ON DELETE CASCADE.
   const { error } = await client.from("whatsapp_campaigns").delete().eq("id", id);
   if (error) throw error;
+}
+
+// ── WhatsApp campaign recipients (evidencias) ─────────────────────────────────
+
+export type WhatsAppRecipientRecord = {
+  phone: string;
+  variables: Record<string, string>;
+};
+
+export async function addWhatsAppCampaignRecipients(
+  campaignId: string,
+  recipients: WhatsAppRecipientRecord[]
+): Promise<void> {
+  const client = ensureSupabase();
+  for (let i = 0; i < recipients.length; i += RECIPIENT_INSERT_CHUNK) {
+    const chunk = recipients.slice(i, i + RECIPIENT_INSERT_CHUNK).map((r) => ({
+      campaign_id: campaignId,
+      phone: r.phone,
+      variables: r.variables,
+      status: "sent"
+    }));
+    const { error } = await client.from("whatsapp_campaign_recipients").insert(chunk);
+    if (error) throw error;
+  }
+}
+
+// ── Datos para reportes de evidencia ──────────────────────────────────────────
+
+const REPORT_PAGE_SIZE = 1000;
+
+export type EmailRecipientReportRow = {
+  email: string;
+  data: ContactRecord;
+  status: string;
+  sentAt: string | null;
+};
+
+/** Todos los destinatarios de una campaña (paginado: PostgREST corta en 1000). */
+export async function listAllCampaignRecipients(campaignId: string): Promise<EmailRecipientReportRow[]> {
+  const client = ensureSupabase();
+  const rows: EmailRecipientReportRow[] = [];
+  for (let from = 0; ; from += REPORT_PAGE_SIZE) {
+    const { data, error } = await client
+      .from("campaign_recipients")
+      .select("email,data,status,sent_at")
+      .eq("campaign_id", campaignId)
+      .order("created_at", { ascending: true })
+      .range(from, from + REPORT_PAGE_SIZE - 1);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      rows.push({
+        email: row.email as string,
+        data: (row.data as ContactRecord) ?? { email: row.email as string },
+        status: row.status as string,
+        sentAt: (row.sent_at as string | null) ?? null
+      });
+    }
+    if (!data || data.length < REPORT_PAGE_SIZE) break;
+  }
+  return rows;
+}
+
+export type CampaignReportHeader = {
+  title: string;
+  subject: string;
+  createdAt: string;
+  projectName: string | null;
+  htmlSanitized: string;
+  validationMetrics: CampaignMetrics | null;
+};
+
+export async function getCampaignReportHeader(id: string): Promise<CampaignReportHeader> {
+  const client = ensureSupabase();
+  const { data, error } = await client
+    .from("campaigns")
+    .select("title,subject,created_at,html_sanitized,validation_metrics,projects(name)")
+    .eq("id", id)
+    .single();
+  if (error) throw error;
+  return {
+    title: data.title as string,
+    subject: (data.subject as string) ?? "",
+    createdAt: data.created_at as string,
+    projectName: embeddedProjectName(data),
+    htmlSanitized: (data.html_sanitized as string) ?? "",
+    validationMetrics: (data.validation_metrics as CampaignMetrics | null) ?? null
+  };
+}
+
+export type WhatsAppRecipientReportRow = {
+  phone: string;
+  variables: Record<string, string>;
+  sentAt: string | null;
+};
+
+export async function listAllWhatsAppCampaignRecipients(
+  campaignId: string
+): Promise<WhatsAppRecipientReportRow[]> {
+  const client = ensureSupabase();
+  const rows: WhatsAppRecipientReportRow[] = [];
+  for (let from = 0; ; from += REPORT_PAGE_SIZE) {
+    const { data, error } = await client
+      .from("whatsapp_campaign_recipients")
+      .select("phone,variables,sent_at")
+      .eq("campaign_id", campaignId)
+      .order("created_at", { ascending: true })
+      .range(from, from + REPORT_PAGE_SIZE - 1);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      rows.push({
+        phone: row.phone as string,
+        variables: (row.variables as Record<string, string>) ?? {},
+        sentAt: (row.sent_at as string | null) ?? null
+      });
+    }
+    if (!data || data.length < REPORT_PAGE_SIZE) break;
+  }
+  return rows;
 }
 
 export async function deleteCampaign(id: string): Promise<void> {
