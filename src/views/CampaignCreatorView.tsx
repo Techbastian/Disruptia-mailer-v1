@@ -41,7 +41,7 @@ const EMPTY_METRICS: CampaignMetrics = {
   duplicatesRemoved: 0
 };
 
-const STEP_LABELS = ["Destinatarios", "Estructura", "Contenido", "Confirmar"];
+const STEP_LABELS = ["Estructura", "Destinatarios", "Confirmar"];
 
 function StepBar({ current }: { current: number }) {
   return (
@@ -80,156 +80,33 @@ function StepBar({ current }: { current: number }) {
   );
 }
 
-// ── Step 1: Upload CSV/XLSX ──────────────────────────────────────────────────
+// ── Step 1: Template selection + subject + campaign vars ────────────────────
 
 function Step1({
-  contacts,
-  metrics,
-  columnNames,
-  invalidRows,
-  contactsDropped,
-  onFileLoaded,
-  onNext
-}: {
-  contacts: ContactRecord[];
-  metrics: CampaignMetrics;
-  columnNames: string[];
-  invalidRows: InvalidRow[];
-  contactsDropped: boolean;
-  onFileLoaded: (
-    contacts: ContactRecord[],
-    metrics: CampaignMetrics,
-    columnNames: string[],
-    invalidRows: InvalidRow[]
-  ) => void;
-  onNext: () => void;
-}) {
-  const hasContacts = contacts.length > 0;
-  const overLimit = contacts.length > DAILY_EMAIL_LIMIT;
-
-  return (
-    <div className="space-y-6">
-      {contactsDropped && !hasContacts && (
-        <div className="flex items-start gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4">
-          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-yellow-600" />
-          <p className="text-sm text-yellow-800">
-            El borrador se recuperó, pero la lista de contactos era demasiado grande para guardarse en el navegador.
-            Volvé a subir el archivo; el resto de la campaña sigue como la dejaste.
-          </p>
-        </div>
-      )}
-
-      <FileDropzone
-        subtitle="Archivos CSV o XLSX — columnas esperadas: email, nombre, etc."
-        onFile={async (file) => {
-          const result = await parseContactsFile(file);
-          onFileLoaded(result.contacts, result.metrics, result.columnNames, result.invalidRows);
-        }}
-      />
-
-      {hasContacts && (
-        <>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <StatCard label="Total" value={metrics.totalLoaded} />
-            <StatCard label="Válidos" value={metrics.validEmails} tone="primary" />
-            <StatCard label="Inválidos" value={metrics.invalidEmails} tone={metrics.invalidEmails > 0 ? "warning" : undefined} />
-            <StatCard label="Duplicados" value={metrics.duplicatesRemoved} tone={metrics.duplicatesRemoved > 0 ? "warning" : undefined} />
-          </div>
-
-          {columnNames.length > 0 && (
-            <div className="rounded-xl bg-surface p-4">
-              <p className="mb-2 text-xs font-semibold text-text-muted">Columnas detectadas</p>
-              <div className="flex flex-wrap gap-1.5">
-                {columnNames.map((col) => (
-                  <span key={col} className="rounded-full border border-border bg-background px-2.5 py-1 font-mono text-xs">
-                    {col}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {overLimit && (
-            <div className="flex items-start gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4">
-              <AlertTriangle size={16} className="mt-0.5 shrink-0 text-yellow-600" />
-              <div className="text-sm text-yellow-800">
-                <p className="font-semibold">
-                  Más de {DAILY_EMAIL_LIMIT} contactos: el envío saldrá en lotes diarios
-                </p>
-                <p className="mt-1 text-xs text-yellow-700">
-                  Tenés {contacts.length} contactos válidos. Hoy sale el primer lote (según el cupo global de{" "}
-                  {DAILY_EMAIL_LIMIT}/día entre todas las campañas) y el resto queda pendiente para despachar desde el
-                  Dashboard con "Enviar lote".
-                </p>
-              </div>
-            </div>
-          )}
-
-          {invalidRows.length > 0 && (
-            <details className="rounded-xl border border-border">
-              <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-text-muted hover:text-text-primary">
-                Ver {invalidRows.length} filas descartadas
-              </summary>
-              <div className="border-t border-border">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="bg-surface">
-                      <th className="px-4 py-2 text-left font-medium text-text-muted">Fila</th>
-                      <th className="px-4 py-2 text-left font-medium text-text-muted">Email</th>
-                      <th className="px-4 py-2 text-left font-medium text-text-muted">Motivo</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invalidRows.slice(0, 50).map((row) => (
-                      <tr key={row.rowNumber} className="border-t border-border/50">
-                        <td className="px-4 py-2 text-text-muted">{row.rowNumber}</td>
-                        <td className="px-4 py-2 font-mono">{row.email}</td>
-                        <td className="px-4 py-2 text-error">{row.reason}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </details>
-          )}
-        </>
-      )}
-
-      <StickyActions>
-        <span />
-        <button type="button" onClick={onNext} disabled={!hasContacts} className="btn-primary disabled:opacity-40">
-          Continuar con estructura →
-        </button>
-      </StickyActions>
-    </div>
-  );
-}
-
-// ── Step 2: Template selection ───────────────────────────────────────────────
-
-function Step2({
   templates,
   selectedId,
-  columnNames,
+  subject,
+  campaignVars,
   onSelect,
-  onNext,
-  onBack
+  onSubjectChange,
+  onVarsChange,
+  onNext
 }: {
   templates: EmailTemplate[];
   selectedId: string | null;
-  columnNames: string[];
+  subject: string;
+  campaignVars: Record<string, string>;
   onSelect: (id: string) => void;
+  onSubjectChange: (subject: string) => void;
+  onVarsChange: (vars: Record<string, string>) => void;
   onNext: () => void;
-  onBack: () => void;
 }) {
   const selected = templates.find((t) => t.id === selectedId) ?? null;
 
-  const missingColumns = useMemo(() => {
-    if (!selected) return [];
-    return selected.variablesCsv.filter((v) => !columnNames.includes(v));
-  }, [selected, columnNames]);
-
-  const canContinue = selectedId !== null && missingColumns.length === 0;
+  const canContinue =
+    selected !== null &&
+    subject.trim().length > 0 &&
+    selected.variablesCampaign.every((v) => (campaignVars[v] ?? "").trim().length > 0);
 
   return (
     <div className="space-y-6">
@@ -287,108 +164,205 @@ function Step2({
       )}
 
       {selected && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/50 p-4">
-          <p className="text-sm text-text-muted">
-            ¿La lista todavía no existe? Descargá el Excel guía con las columnas que "{selected.name}" necesita.
-          </p>
-          <button
-            type="button"
-            onClick={() => downloadContactsExcelTemplate(selected)}
-            className="btn-secondary flex shrink-0 items-center gap-2 text-sm"
-          >
-            <FileSpreadsheet size={14} />
-            Descargar Excel guía
-          </button>
-        </div>
-      )}
-
-      {missingColumns.length > 0 && (
-        <div className="flex items-start gap-3 rounded-xl border border-error/40 bg-error/5 p-4">
-          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-error" />
-          <div className="text-sm text-error">
-            <p className="font-semibold">Columnas faltantes en el CSV</p>
-            <p className="mt-1 text-xs">
-              Esta plantilla requiere: {missingColumns.map((c) => `{{${c}}}`).join(", ")}. Estas columnas no están en el
-              archivo subido.
-            </p>
-            <p className="mt-1 text-xs text-error/70">Subí un archivo con estas columnas o elegí otra plantilla.</p>
+        <article className="card space-y-4">
+          <div>
+            <label className="block text-sm font-semibold">Asunto del correo</label>
+            <input
+              className="input mt-2"
+              value={subject}
+              onChange={(e) => onSubjectChange(e.target.value)}
+              placeholder="ej. Te citamos a una entrevista — Disruptia"
+            />
           </div>
-        </div>
+
+          {selected.variablesCampaign.length > 0 && (
+            <div className="space-y-4 border-t border-border pt-4">
+              <div>
+                <p className="font-heading font-semibold">Variables de campaña</p>
+                <p className="mt-1 text-xs text-text-muted">Estos valores son iguales para todos los destinatarios.</p>
+              </div>
+              {selected.variablesCampaign.map((varName) => (
+                <div key={varName}>
+                  <label className="block text-sm font-semibold">
+                    <code className="rounded bg-surface px-1.5 py-0.5 text-xs">{`{{${varName}}}`}</code>
+                  </label>
+                  <input
+                    className="input mt-2"
+                    value={campaignVars[varName] ?? ""}
+                    onChange={(e) => onVarsChange({ ...campaignVars, [varName]: e.target.value })}
+                    placeholder={`Valor para ${varName}...`}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+        </article>
       )}
 
       <StickyActions>
-        <button type="button" onClick={onBack} className="btn-secondary">
-          ← Volver
-        </button>
+        <span />
         <button type="button" onClick={onNext} disabled={!canContinue} className="btn-primary disabled:opacity-40">
-          Continuar con contenido →
+          Continuar con destinatarios →
         </button>
       </StickyActions>
     </div>
   );
 }
 
-// ── Step 3: Campaign variables + subject ─────────────────────────────────────
+// ── Step 2: Upload CSV/XLSX (with Excel guide for the chosen template) ───────
 
-function Step3({
+function Step2({
   template,
-  campaignVars,
-  subject,
-  onVarsChange,
-  onSubjectChange,
+  contacts,
+  metrics,
+  columnNames,
+  invalidRows,
+  contactsDropped,
+  onFileLoaded,
   onNext,
   onBack
 }: {
   template: EmailTemplate;
-  campaignVars: Record<string, string>;
-  subject: string;
-  onVarsChange: (vars: Record<string, string>) => void;
-  onSubjectChange: (subject: string) => void;
+  contacts: ContactRecord[];
+  metrics: CampaignMetrics;
+  columnNames: string[];
+  invalidRows: InvalidRow[];
+  contactsDropped: boolean;
+  onFileLoaded: (
+    contacts: ContactRecord[],
+    metrics: CampaignMetrics,
+    columnNames: string[],
+    invalidRows: InvalidRow[]
+  ) => void;
   onNext: () => void;
   onBack: () => void;
 }) {
-  const canContinue =
-    subject.trim().length > 0 &&
-    template.variablesCampaign.every((v) => (campaignVars[v] ?? "").trim().length > 0);
+  const hasContacts = contacts.length > 0;
+  const overLimit = contacts.length > DAILY_EMAIL_LIMIT;
+
+  const missingColumns = useMemo(() => {
+    if (!hasContacts) return [];
+    return template.variablesCsv.filter((v) => !columnNames.includes(v));
+  }, [template, columnNames, hasContacts]);
+
+  const canContinue = hasContacts && missingColumns.length === 0;
 
   return (
     <div className="space-y-6">
-      <article className="card space-y-4">
-        <div>
-          <label className="block text-sm font-semibold">Asunto del correo</label>
-          <input
-            className="input mt-2"
-            value={subject}
-            onChange={(e) => onSubjectChange(e.target.value)}
-            placeholder="ej. Te citamos a una entrevista — Disruptia"
-          />
-        </div>
-      </article>
+      <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/50 p-4">
+        <p className="text-sm text-text-muted">
+          ¿La lista todavía no existe? Descargá el Excel guía con las columnas que "{template.name}" necesita.
+        </p>
+        <button
+          type="button"
+          onClick={() => downloadContactsExcelTemplate(template)}
+          className="btn-secondary flex shrink-0 items-center gap-2 text-sm"
+        >
+          <FileSpreadsheet size={14} />
+          Descargar Excel guía
+        </button>
+      </div>
 
-      {template.variablesCampaign.length > 0 ? (
-        <article className="card space-y-4">
-          <div>
-            <p className="font-heading font-semibold">Variables de campaña</p>
-            <p className="mt-1 text-xs text-text-muted">Estos valores son iguales para todos los destinatarios.</p>
-          </div>
-          {template.variablesCampaign.map((varName) => (
-            <div key={varName}>
-              <label className="block text-sm font-semibold">
-                <code className="rounded bg-surface px-1.5 py-0.5 text-xs">{`{{${varName}}}`}</code>
-              </label>
-              <input
-                className="input mt-2"
-                value={campaignVars[varName] ?? ""}
-                onChange={(e) => onVarsChange({ ...campaignVars, [varName]: e.target.value })}
-                placeholder={`Valor para ${varName}...`}
-              />
-            </div>
-          ))}
-        </article>
-      ) : (
-        <div className="rounded-xl border border-border bg-surface/50 p-6 text-center text-sm text-text-muted">
-          Esta plantilla no tiene variables de campaña. Solo usa variables del CSV que N8N reemplazará por destinatario.
+      {contactsDropped && !hasContacts && (
+        <div className="flex items-start gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-yellow-600" />
+          <p className="text-sm text-yellow-800">
+            El borrador se recuperó, pero la lista de contactos era demasiado grande para guardarse en el navegador.
+            Volvé a subir el archivo; el resto de la campaña sigue como la dejaste.
+          </p>
         </div>
+      )}
+
+      <FileDropzone
+        subtitle={`Archivos CSV o XLSX — columnas esperadas: ${[...new Set(["email", "nombre", ...template.variablesCsv])].join(", ")}`}
+        onFile={async (file) => {
+          const result = await parseContactsFile(file);
+          onFileLoaded(result.contacts, result.metrics, result.columnNames, result.invalidRows);
+        }}
+      />
+
+      {hasContacts && (
+        <>
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <StatCard label="Total" value={metrics.totalLoaded} />
+            <StatCard label="Válidos" value={metrics.validEmails} tone="primary" />
+            <StatCard label="Inválidos" value={metrics.invalidEmails} tone={metrics.invalidEmails > 0 ? "warning" : undefined} />
+            <StatCard label="Duplicados" value={metrics.duplicatesRemoved} tone={metrics.duplicatesRemoved > 0 ? "warning" : undefined} />
+          </div>
+
+          {columnNames.length > 0 && (
+            <div className="rounded-xl bg-surface p-4">
+              <p className="mb-2 text-xs font-semibold text-text-muted">Columnas detectadas</p>
+              <div className="flex flex-wrap gap-1.5">
+                {columnNames.map((col) => (
+                  <span key={col} className="rounded-full border border-border bg-background px-2.5 py-1 font-mono text-xs">
+                    {col}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {missingColumns.length > 0 && (
+            <div className="flex items-start gap-3 rounded-xl border border-error/40 bg-error/5 p-4">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0 text-error" />
+              <div className="text-sm text-error">
+                <p className="font-semibold">Columnas faltantes en el archivo</p>
+                <p className="mt-1 text-xs">
+                  La plantilla "{template.name}" requiere: {missingColumns.map((c) => `{{${c}}}`).join(", ")}. Estas
+                  columnas no están en el archivo subido.
+                </p>
+                <p className="mt-1 text-xs text-error/70">
+                  Subí un archivo con estas columnas (usá el Excel guía) o volvé y elegí otra plantilla.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {overLimit && (
+            <div className="flex items-start gap-3 rounded-xl border border-warning/40 bg-warning/10 p-4">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0 text-yellow-600" />
+              <div className="text-sm text-yellow-800">
+                <p className="font-semibold">
+                  Más de {DAILY_EMAIL_LIMIT} contactos: el envío saldrá en lotes diarios
+                </p>
+                <p className="mt-1 text-xs text-yellow-700">
+                  Tenés {contacts.length} contactos válidos. Hoy sale el primer lote (según el cupo global de{" "}
+                  {DAILY_EMAIL_LIMIT}/día entre todas las campañas) y el resto queda pendiente para despachar desde el
+                  Dashboard con "Enviar lote".
+                </p>
+              </div>
+            </div>
+          )}
+
+          {invalidRows.length > 0 && (
+            <details className="rounded-xl border border-border">
+              <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-text-muted hover:text-text-primary">
+                Ver {invalidRows.length} filas descartadas
+              </summary>
+              <div className="border-t border-border">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-surface">
+                      <th className="px-4 py-2 text-left font-medium text-text-muted">Fila</th>
+                      <th className="px-4 py-2 text-left font-medium text-text-muted">Email</th>
+                      <th className="px-4 py-2 text-left font-medium text-text-muted">Motivo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invalidRows.slice(0, 50).map((row) => (
+                      <tr key={row.rowNumber} className="border-t border-border/50">
+                        <td className="px-4 py-2 text-text-muted">{row.rowNumber}</td>
+                        <td className="px-4 py-2 font-mono">{row.email}</td>
+                        <td className="px-4 py-2 text-error">{row.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
+        </>
       )}
 
       <StickyActions>
@@ -403,9 +377,9 @@ function Step3({
   );
 }
 
-// ── Step 4: Summary + confirm send ───────────────────────────────────────────
+// ── Step 3: Summary + confirm send ───────────────────────────────────────────
 
-function Step4({
+function Step3({
   template,
   contacts,
   subject,
@@ -542,6 +516,12 @@ export default function CampaignCreatorView({ templates, initialTemplateId, onCa
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTemplateId]);
 
+  // Borradores guardados con el flujo viejo de 4 pasos: el paso 4 ya no existe.
+  useEffect(() => {
+    if (draft.step > 3) updateDraft({ step: 3 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const selectedTemplate = templates.find((t) => t.id === draft.selectedTemplateId) ?? null;
   const draftActive = isDraftActive(draft);
 
@@ -655,6 +635,23 @@ export default function CampaignCreatorView({ templates, initialTemplateId, onCa
 
       {draft.step === 1 && (
         <Step1
+          templates={templates}
+          selectedId={draft.selectedTemplateId}
+          subject={draft.subject}
+          campaignVars={draft.campaignVars}
+          onSelect={(id) => {
+            // Cambiar de plantilla limpia las variables de campaña (son de otra estructura).
+            if (id !== draft.selectedTemplateId) updateDraft({ selectedTemplateId: id, campaignVars: {} });
+          }}
+          onSubjectChange={(subject) => updateDraft({ subject })}
+          onVarsChange={(campaignVars) => updateDraft({ campaignVars })}
+          onNext={() => updateDraft({ step: 2 })}
+        />
+      )}
+
+      {draft.step === 2 && selectedTemplate && (
+        <Step2
+          template={selectedTemplate}
           contacts={draft.contacts}
           metrics={draft.metrics ?? EMPTY_METRICS}
           columnNames={draft.columnNames}
@@ -663,17 +660,7 @@ export default function CampaignCreatorView({ templates, initialTemplateId, onCa
           onFileLoaded={(c, m, cols, inv) => {
             updateDraft({ contacts: c, metrics: m, columnNames: cols, invalidRows: inv, contactsDropped: false });
           }}
-          onNext={() => updateDraft({ step: 2 })}
-        />
-      )}
-
-      {draft.step === 2 && (
-        <Step2
-          templates={templates}
-          selectedId={draft.selectedTemplateId}
-          columnNames={draft.columnNames}
-          onSelect={(id) => updateDraft({ selectedTemplateId: id })}
-          onNext={() => updateDraft({ step: 3, campaignVars: {} })}
+          onNext={() => updateDraft({ step: 3, title: draft.title || draft.subject })}
           onBack={() => updateDraft({ step: 1 })}
         />
       )}
@@ -681,27 +668,24 @@ export default function CampaignCreatorView({ templates, initialTemplateId, onCa
       {draft.step === 3 && selectedTemplate && (
         <Step3
           template={selectedTemplate}
-          campaignVars={draft.campaignVars}
-          subject={draft.subject}
-          onVarsChange={(campaignVars) => updateDraft({ campaignVars })}
-          onSubjectChange={(subject) => updateDraft({ subject })}
-          onNext={() => updateDraft({ step: 4, title: draft.title || draft.subject })}
-          onBack={() => updateDraft({ step: 2 })}
-        />
-      )}
-
-      {draft.step === 4 && selectedTemplate && (
-        <Step4
-          template={selectedTemplate}
           contacts={draft.contacts}
           subject={draft.subject}
           campaignVars={draft.campaignVars}
           title={draft.title}
           sending={sending}
           onTitleChange={(title) => updateDraft({ title })}
-          onBack={() => updateDraft({ step: 3 })}
+          onBack={() => updateDraft({ step: 2 })}
           onConfirm={handleConfirm}
         />
+      )}
+
+      {draft.step >= 2 && !selectedTemplate && (
+        <div className="card py-10 text-center text-sm text-text-muted">
+          La plantilla del borrador ya no existe.{" "}
+          <button type="button" onClick={() => updateDraft({ step: 1, selectedTemplateId: null })} className="font-semibold text-primary underline">
+            Volver a elegir plantilla
+          </button>
+        </div>
       )}
     </section>
   );
