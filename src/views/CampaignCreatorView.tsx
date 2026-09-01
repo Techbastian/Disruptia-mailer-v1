@@ -3,29 +3,29 @@ import { AlertTriangle, CheckCircle2, ChevronRight, FileSpreadsheet, Send, Trash
 import FileDropzone from "../components/FileDropzone";
 import StatCard from "../components/StatCard";
 import StickyActions from "../components/StickyActions";
+import ProjectFilterBar, { type ProjectFilter } from "../components/ProjectFilterBar";
 import TestEmailBox from "../components/TestEmailBox";
 import { parseContactsFile, type InvalidRow } from "../lib/csv";
-import { sendCampaign } from "../lib/api";
+import { runDispatcher } from "../lib/api";
 import {
   addCampaignRecipients,
   createCampaign,
   createCampaignRun,
-  fetchPendingRecipients,
-  markRecipientsDispatched,
-  setCampaignPendingCount,
-  updateCampaignStatus
+  getCampaignDispatchData
 } from "../lib/db";
 import { DAILY_EMAIL_LIMIT, getRemainingDailyQuota } from "../lib/dispatch";
 import { downloadEmailCampaignReport } from "../lib/report";
 import { downloadContactsExcelTemplate } from "../lib/excelTemplate";
 import { sanitizeHtml } from "../lib/sanitizeHtml";
 import { useMailerStore, isDraftActive } from "../store/useMailerStore";
-import type { CampaignHistoryItem, CampaignMetrics, ContactRecord, EmailTemplate } from "../types";
+import type { CampaignHistoryItem, CampaignMetrics, ContactRecord, EmailTemplate, Project } from "../types";
 
 type CampaignCreatorViewProps = {
   templates: EmailTemplate[];
+  projects: Project[];
   initialTemplateId?: string | null;
   onCampaignCreated: (campaign: CampaignHistoryItem) => void;
+  onEditTemplate: (id: string) => void;
 };
 
 function substituteVars(html: string, vars: Record<string, string>): string {
@@ -80,99 +80,79 @@ function StepBar({ current }: { current: number }) {
   );
 }
 
-// ── Step 1: Template selection + subject + campaign vars ────────────────────
+// ── Step 1: Template selection + campaign vars ──────────────────────────────
+// El asunto NO se edita acá: es un dato de la plantilla (se cambia en su editor).
 
 function Step1({
   templates,
+  projects,
   selectedId,
-  subject,
   campaignVars,
   onSelect,
-  onSubjectChange,
+  onEditTemplate,
   onVarsChange,
   onNext
 }: {
   templates: EmailTemplate[];
+  projects: Project[];
   selectedId: string | null;
-  subject: string;
   campaignVars: Record<string, string>;
   onSelect: (id: string) => void;
-  onSubjectChange: (subject: string) => void;
+  onEditTemplate: (id: string) => void;
   onVarsChange: (vars: Record<string, string>) => void;
   onNext: () => void;
 }) {
   const selected = templates.find((t) => t.id === selectedId) ?? null;
+  const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
+
+  // Las plantillas "General" son agnósticas: también se ven al filtrar por un proyecto.
+  const visibleTemplates = useMemo(() => {
+    if (projectFilter === "all") return templates;
+    if (projectFilter === "general") return templates.filter((t) => t.projectId === null);
+    return templates.filter((t) => t.projectId === projectFilter || t.projectId === null);
+  }, [templates, projectFilter]);
+
+  // Plantilla anterior a la migración 0007: sin asunto no se puede enviar.
+  const missingSubject = selected !== null && selected.subject.trim().length === 0;
 
   const canContinue =
     selected !== null &&
-    subject.trim().length > 0 &&
+    !missingSubject &&
     selected.variablesCampaign.every((v) => (campaignVars[v] ?? "").trim().length > 0);
 
   return (
     <div className="space-y-6">
-      {templates.length === 0 ? (
-        <div className="card py-14 text-center text-sm text-text-muted">
-          No hay plantillas disponibles. Creá una desde la sección Plantillas.
-        </div>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {templates.map((t) => (
-            <article
-              key={t.id}
-              onClick={() => onSelect(t.id)}
-              className={`card cursor-pointer overflow-hidden p-0 transition-all ${
-                selectedId === t.id ? "ring-2 ring-primary ring-offset-2" : "hover:shadow-md"
-              }`}
-            >
-              <div className="relative h-40 w-full overflow-hidden bg-white">
-                <div
-                  style={{
-                    width: "600px",
-                    height: "900px",
-                    transform: "scale(0.43)",
-                    transformOrigin: "top left",
-                    pointerEvents: "none",
-                    position: "absolute",
-                    top: 0,
-                    left: "50%",
-                    marginLeft: "-129px"
-                  }}
-                >
-                  <iframe
-                    title={t.name}
-                    srcDoc={sanitizeHtml(t.html)}
-                    sandbox="allow-popups"
-                    style={{ width: "600px", height: "900px", border: "none" }}
-                  />
-                </div>
-              </div>
-              <div className="space-y-1.5 p-3">
-                <p className="text-sm font-semibold leading-tight">{t.name}</p>
-                {t.variablesCsv.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {t.variablesCsv.map((v) => (
-                      <span key={v} className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
-                        {`{{${v}}}`}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </article>
-          ))}
-        </div>
-      )}
-
+      {/* La configuración del envío va arriba: al elegir plantilla queda a la vista. */}
       {selected && (
         <article className="card space-y-4">
           <div>
-            <label className="block text-sm font-semibold">Asunto del correo</label>
-            <input
-              className="input mt-2"
-              value={subject}
-              onChange={(e) => onSubjectChange(e.target.value)}
-              placeholder="ej. Te citamos a una entrevista — Disruptia"
-            />
+            <div className="flex items-center justify-between gap-3">
+              <label className="block text-sm font-semibold">Asunto del correo</label>
+              <button
+                type="button"
+                onClick={() => onEditTemplate(selected.id)}
+                className="text-xs font-semibold text-primary hover:underline"
+              >
+                Editar en la plantilla
+              </button>
+            </div>
+            {missingSubject ? (
+              <div className="mt-2 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3">
+                <AlertTriangle size={15} className="mt-0.5 shrink-0 text-yellow-600" />
+                <p className="text-xs text-yellow-800">
+                  Esta plantilla no tiene asunto definido. Editala en Plantillas y agregale uno antes de enviar.
+                </p>
+              </div>
+            ) : (
+              <>
+                <p className="mt-2 rounded-lg border border-border bg-surface px-4 py-2.5 text-sm font-semibold">
+                  {selected.subject}
+                </p>
+                <p className="mt-1.5 text-xs text-text-muted">
+                  Viene de la plantilla y es igual en todos sus envíos. Para otro asunto, usá otra plantilla.
+                </p>
+              </>
+            )}
           </div>
 
           {selected.variablesCampaign.length > 0 && (
@@ -198,6 +178,75 @@ function Step1({
           )}
         </article>
       )}
+
+      <div className="space-y-4">
+        <ProjectFilterBar
+          projects={projects}
+          filter={projectFilter}
+          onChange={setProjectFilter}
+          counts={{
+            all: templates.length,
+            general: templates.filter((t) => t.projectId === null).length
+          }}
+        />
+
+        {templates.length === 0 ? (
+          <div className="card py-14 text-center text-sm text-text-muted">
+            No hay plantillas disponibles. Creá una desde la sección Plantillas.
+          </div>
+        ) : visibleTemplates.length === 0 ? (
+          <div className="card py-14 text-center text-sm text-text-muted">
+            Este proyecto no tiene plantillas. Probá con otro filtro o creá una en la sección Plantillas.
+          </div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {visibleTemplates.map((t) => (
+              <article
+                key={t.id}
+                onClick={() => onSelect(t.id)}
+                className={`card cursor-pointer overflow-hidden p-0 transition-all ${
+                  selectedId === t.id ? "ring-2 ring-primary ring-offset-2" : "hover:shadow-md"
+                }`}
+              >
+                <div className="relative h-40 w-full overflow-hidden bg-white">
+                  <div
+                    style={{
+                      width: "600px",
+                      height: "900px",
+                      transform: "scale(0.43)",
+                      transformOrigin: "top left",
+                      pointerEvents: "none",
+                      position: "absolute",
+                      top: 0,
+                      left: "50%",
+                      marginLeft: "-129px"
+                    }}
+                  >
+                    <iframe
+                      title={t.name}
+                      srcDoc={sanitizeHtml(t.html)}
+                      sandbox="allow-popups"
+                      style={{ width: "600px", height: "900px", border: "none" }}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5 p-3">
+                  <p className="text-sm font-semibold leading-tight">{t.name}</p>
+                  {t.variablesCsv.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {t.variablesCsv.map((v) => (
+                        <span key={v} className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+                          {`{{${v}}}`}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </div>
 
       <StickyActions>
         <span />
@@ -500,7 +549,13 @@ function Step3({
 
 // ── Main component ───────────────────────────────────────────────────────────
 
-export default function CampaignCreatorView({ templates, initialTemplateId, onCampaignCreated }: CampaignCreatorViewProps) {
+export default function CampaignCreatorView({
+  templates,
+  projects,
+  initialTemplateId,
+  onCampaignCreated,
+  onEditTemplate
+}: CampaignCreatorViewProps) {
   const draft = useMailerStore((s) => s.campaignDraft);
   const updateDraft = useMailerStore((s) => s.updateCampaignDraft);
   const resetDraft = useMailerStore((s) => s.resetCampaignDraft);
@@ -525,17 +580,21 @@ export default function CampaignCreatorView({ templates, initialTemplateId, onCa
   const selectedTemplate = templates.find((t) => t.id === draft.selectedTemplateId) ?? null;
   const draftActive = isDraftActive(draft);
 
+  // El asunto vive en la plantilla: un borrador guardado se realinea si la
+  // plantilla cambió de asunto mientras tanto.
+  useEffect(() => {
+    if (selectedTemplate && draft.subject !== selectedTemplate.subject) {
+      updateDraft({ subject: selectedTemplate.subject });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTemplate?.id, selectedTemplate?.subject]);
+
   async function handleConfirm(title: string) {
     if (!selectedTemplate) return;
     setSending(true);
     try {
       const finalHtml = sanitizeHtml(substituteVars(selectedTemplate.html, draft.campaignVars));
       const contacts = draft.contacts;
-
-      // Cupo diario GLOBAL (todas las campañas): el primer lote sale hasta
-      // agotarlo; el resto queda pendiente para "Enviar lote" en el Dashboard.
-      const quota = await getRemainingDailyQuota();
-      const firstBatchSize = Math.min(contacts.length, quota);
 
       const campaign = await createCampaign({
         title,
@@ -551,27 +610,20 @@ export default function CampaignCreatorView({ templates, initialTemplateId, onCa
       await createCampaignRun(campaign.id);
       await addCampaignRecipients(campaign.id, contacts);
 
+      // El despacho es server-side: sale lo que permita el cupo del día y el
+      // resto queda pendiente para la próxima corrida del runner.
       let remainingPending = contacts.length;
-      if (firstBatchSize > 0) {
-        const batch = await fetchPendingRecipients(campaign.id, firstBatchSize);
-        try {
-          await sendCampaign({
-            campaignId: campaign.id,
-            html: finalHtml,
-            subject: draft.subject,
-            contacts: batch.map((r) => r.contact)
-          });
-        } catch (err) {
-          // La campaña ya existe en Supabase: marcarla fallida evita zombies
-          // "en cola" y duplicados si el usuario reintenta. Los destinatarios
-          // quedan pending para reintentar desde el Dashboard.
-          await updateCampaignStatus(campaign.id, "failed").catch(() => undefined);
-          const detail = err instanceof Error ? err.message : String(err);
-          throw new Error(`El envío falló y la campaña quedó marcada como fallida. Detalle: ${detail}`);
-        }
-        await markRecipientsDispatched(batch.map((r) => r.id));
-        remainingPending = contacts.length - batch.length;
-        await setCampaignPendingCount(campaign.id, remainingPending);
+      try {
+        const summary = await runDispatcher({ campaignId: campaign.id, trigger: "campaign" });
+        if (summary.errors.length > 0) throw new Error(summary.errors.join(" | "));
+        remainingPending = (await getCampaignDispatchData(campaign.id)).pendingCount;
+      } catch (err) {
+        // La campaña ya está guardada con su lista: no se pierde nada, se
+        // reintenta desde el Dashboard sin riesgo de duplicar envíos.
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `La campaña quedó guardada con ${contacts.length} destinatarios pendientes, pero el despacho no arrancó. Reintentá desde el Dashboard. Detalle: ${detail}`
+        );
       }
 
       // Reporte de evidencia: se descarga automáticamente tras cada envío.
@@ -636,14 +688,18 @@ export default function CampaignCreatorView({ templates, initialTemplateId, onCa
       {draft.step === 1 && (
         <Step1
           templates={templates}
+          projects={projects}
           selectedId={draft.selectedTemplateId}
-          subject={draft.subject}
           campaignVars={draft.campaignVars}
           onSelect={(id) => {
-            // Cambiar de plantilla limpia las variables de campaña (son de otra estructura).
-            if (id !== draft.selectedTemplateId) updateDraft({ selectedTemplateId: id, campaignVars: {} });
+            // Cambiar de plantilla limpia las variables de campaña (son de otra
+            // estructura) y trae el asunto de la plantilla nueva.
+            if (id !== draft.selectedTemplateId) {
+              const next = templates.find((t) => t.id === id) ?? null;
+              updateDraft({ selectedTemplateId: id, campaignVars: {}, subject: next?.subject ?? "" });
+            }
           }}
-          onSubjectChange={(subject) => updateDraft({ subject })}
+          onEditTemplate={onEditTemplate}
           onVarsChange={(campaignVars) => updateDraft({ campaignVars })}
           onNext={() => updateDraft({ step: 2 })}
         />

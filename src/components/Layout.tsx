@@ -1,5 +1,6 @@
-import { BarChart3, FolderKanban, LayoutTemplate, MailPlus, MessageSquareText, Send } from "lucide-react";
-import type { ReactNode } from "react";
+import { BarChart3, FolderKanban, LayoutTemplate, LogOut, MailPlus, MessageSquareText, Send } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { supabase } from "../lib/supabase";
 import { isDraftActive, useMailerStore } from "../store/useMailerStore";
 import type { AppView } from "../types";
 
@@ -67,6 +68,12 @@ function NavButton({
 export default function Layout({ view, onChangeView, children }: LayoutProps) {
   const activeId = activeFor[view] ?? view;
   const hasDraft = useMailerStore((s) => isDraftActive(s.campaignDraft));
+  const [email, setEmail] = useState("");
+
+  useEffect(() => {
+    if (!supabase) return;
+    void supabase.auth.getSession().then(({ data }) => setEmail(data.session?.user.email ?? ""));
+  }, []);
 
   return (
     <div className="min-h-screen bg-surface">
@@ -96,8 +103,20 @@ export default function Layout({ view, onChangeView, children }: LayoutProps) {
 
       <div className="ml-[280px]">
         <header className="sticky top-0 z-10 border-b border-border bg-card px-8 py-4">
-          <div className="flex items-center justify-end gap-4">
-            <div className="rounded-full bg-primary px-3 py-1 text-xs font-semibold text-white">Equipo Disruptia</div>
+          <div className="flex items-center justify-end gap-3">
+            <div className="rounded-full bg-primary px-3 py-1 text-xs font-semibold text-white">
+              {email || "Equipo Disruptia"}
+            </div>
+            {supabase && (
+              <button
+                type="button"
+                onClick={() => void supabase?.auth.signOut()}
+                className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-muted hover:bg-surface"
+              >
+                <LogOut size={13} />
+                Salir
+              </button>
+            )}
           </div>
         </header>
         <main className="mx-auto max-w-[1440px] p-8">{children}</main>

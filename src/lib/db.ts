@@ -8,7 +8,7 @@ import type {
   WhatsAppCampaignItem,
   WhatsAppTemplate
 } from "../types";
-import { DEFAULT_ACTOR_ID, supabase, SUPABASE_BUCKET_ASSETS } from "./supabase";
+import { getActorId, supabase, SUPABASE_BUCKET_ASSETS } from "./supabase";
 
 type CreateCampaignInput = {
   title: string;
@@ -79,7 +79,7 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Campai
       pending_count: input.pendingCount,
       validation_metrics: input.validationMetrics,
       project_id: input.projectId,
-      created_by: DEFAULT_ACTOR_ID
+      created_by: getActorId()
     })
     .select(CAMPAIGN_SELECT)
     .single();
@@ -88,19 +88,9 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Campai
   return rowToCampaign(data);
 }
 
-export async function updateCampaignStatus(
-  id: string,
-  status: CampaignHistoryItem["status"]
-): Promise<void> {
-  const client = ensureSupabase();
-  const { error } = await client.from("campaigns").update({ status }).eq("id", id);
-  if (error) throw error;
-}
-
-// ── Campaign recipients (persistencia + batching por cupo diario) ─────────────
+// ── Campaign recipients (persistencia; el despacho por lotes vive en el runner) ─
 
 const RECIPIENT_INSERT_CHUNK = 500;
-const RECIPIENT_UPDATE_CHUNK = 200;
 
 export async function addCampaignRecipients(campaignId: string, contacts: ContactRecord[]): Promise<void> {
   const client = ensureSupabase();
@@ -116,58 +106,35 @@ export async function addCampaignRecipients(campaignId: string, contacts: Contac
   }
 }
 
-export type PendingRecipient = {
-  id: string;
-  contact: ContactRecord;
-};
+// America/Bogota no tiene horario de verano: offset fijo. Tiene que dar el MISMO
+// corte que la Edge Function dispatch-runner, o el cupo se contaría distinto.
+const BOGOTA_OFFSET_MS = -5 * 60 * 60 * 1000;
 
-export async function fetchPendingRecipients(campaignId: string, limit: number): Promise<PendingRecipient[]> {
-  const client = ensureSupabase();
-  const { data, error } = await client
-    .from("campaign_recipients")
-    .select("id,email,data")
-    .eq("campaign_id", campaignId)
-    .eq("status", "pending")
-    .order("created_at", { ascending: true })
-    .limit(limit);
-  if (error) throw error;
-  return (data ?? []).map((row) => ({
-    id: row.id as string,
-    contact: { ...(row.data as ContactRecord), email: row.email as string }
-  }));
+export function startOfDayBogotaIso(now: Date = new Date()): string {
+  const local = new Date(now.getTime() + BOGOTA_OFFSET_MS);
+  const startLocal = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate());
+  return new Date(startLocal - BOGOTA_OFFSET_MS).toISOString();
 }
 
-export async function markRecipientsDispatched(ids: string[]): Promise<void> {
+async function countSentToday(table: string): Promise<number> {
   const client = ensureSupabase();
-  const sentAt = new Date().toISOString();
-  for (let i = 0; i < ids.length; i += RECIPIENT_UPDATE_CHUNK) {
-    const chunk = ids.slice(i, i + RECIPIENT_UPDATE_CHUNK);
-    const { error } = await client
-      .from("campaign_recipients")
-      .update({ status: "sent", sent_at: sentAt })
-      .in("id", chunk);
-    if (error) throw error;
-  }
-}
-
-export async function setCampaignPendingCount(id: string, pendingCount: number): Promise<void> {
-  const client = ensureSupabase();
-  const { error } = await client.from("campaigns").update({ pending_count: pendingCount }).eq("id", id);
-  if (error) throw error;
-}
-
-/** Despachados hoy (hora local) entre TODAS las campañas — para el cupo global diario. */
-export async function countDispatchedToday(): Promise<number> {
-  const client = ensureSupabase();
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
   const { count, error } = await client
-    .from("campaign_recipients")
+    .from(table)
     .select("id", { count: "exact", head: true })
     .eq("status", "sent")
-    .gte("sent_at", startOfDay.toISOString());
+    .gte("sent_at", startOfDayBogotaIso());
   if (error) throw error;
   return count ?? 0;
+}
+
+/** Correos despachados hoy (Bogotá) entre TODAS las campañas — cupo global diario. */
+export async function countDispatchedToday(): Promise<number> {
+  return countSentToday("campaign_recipients");
+}
+
+/** Mensajes de WhatsApp despachados hoy (Bogotá) entre TODOS los envíos. */
+export async function countWhatsAppSentToday(): Promise<number> {
+  return countSentToday("whatsapp_campaign_recipients");
 }
 
 export type CampaignDispatchData = {
@@ -225,13 +192,14 @@ export async function listAssets(): Promise<AssetItem[]> {
 // ── Templates ────────────────────────────────────────────────────────────────
 
 const TEMPLATE_SELECT =
-  "id,name,description,html,variables_csv,variables_campaign,project_id,created_at,updated_at";
+  "id,name,description,subject,html,variables_csv,variables_campaign,project_id,created_at,updated_at";
 
 function rowToTemplate(row: Record<string, unknown>): EmailTemplate {
   return {
     id: row.id as string,
     name: row.name as string,
     description: (row.description as string) ?? "",
+    subject: (row.subject as string) ?? "",
     html: row.html as string,
     variablesCsv: (row.variables_csv as string[]) ?? [],
     variablesCampaign: (row.variables_campaign as string[]) ?? [],
@@ -266,6 +234,7 @@ export type SaveTemplateInput = {
   id?: string;
   name: string;
   description: string;
+  subject: string;
   html: string;
   variablesCsv: string[];
   variablesCampaign: string[];
@@ -277,6 +246,7 @@ export async function saveTemplate(input: SaveTemplateInput): Promise<EmailTempl
   const payload = {
     name: input.name,
     description: input.description,
+    subject: input.subject,
     html: input.html,
     variables_csv: input.variablesCsv,
     variables_campaign: input.variablesCampaign,
@@ -298,7 +268,7 @@ export async function saveTemplate(input: SaveTemplateInput): Promise<EmailTempl
 
   const { data, error } = await client
     .from("email_templates")
-    .insert({ ...payload, created_by: DEFAULT_ACTOR_ID })
+    .insert({ ...payload, created_by: getActorId() })
     .select(select)
     .single();
   if (error) throw error;
@@ -348,7 +318,7 @@ export async function createProject(name: string): Promise<Project> {
   const client = ensureSupabase();
   const { data, error } = await client
     .from("projects")
-    .insert({ name, created_by: DEFAULT_ACTOR_ID })
+    .insert({ name, created_by: getActorId() })
     .select("id,name,created_at")
     .single();
   if (error) throw error;
@@ -424,7 +394,7 @@ export async function saveWhatsAppTemplate(input: SaveWhatsAppTemplateInput): Pr
 
   const { data, error } = await client
     .from("whatsapp_templates")
-    .insert({ ...payload, created_by: DEFAULT_ACTOR_ID })
+    .insert({ ...payload, created_by: getActorId() })
     .select(WA_TEMPLATE_SELECT)
     .single();
   if (error) throw error;
@@ -440,7 +410,7 @@ export async function deleteWhatsAppTemplate(id: string): Promise<void> {
 // ── WhatsApp campaigns (historial de envíos) ──────────────────────────────────
 
 const WA_CAMPAIGN_SELECT =
-  "id,template_name,template_language,recipient_count,status,validation_metrics,project_id,projects(name),created_at";
+  "id,template_name,template_language,recipient_count,pending_count,status,validation_metrics,project_id,projects(name),created_at";
 
 function rowToWhatsAppCampaign(row: Record<string, unknown>): WhatsAppCampaignItem {
   return {
@@ -448,6 +418,7 @@ function rowToWhatsAppCampaign(row: Record<string, unknown>): WhatsAppCampaignIt
     templateName: row.template_name as string,
     templateLanguage: (row.template_language as string) ?? "es",
     recipients: (row.recipient_count as number) ?? 0,
+    pendingCount: (row.pending_count as number) ?? 0,
     status: row.status as WhatsAppCampaignItem["status"],
     validationMetrics: (row.validation_metrics as WhatsAppCampaignItem["validationMetrics"]) ?? null,
     projectId: (row.project_id as string | null) ?? null,
@@ -467,10 +438,24 @@ export async function listWhatsAppCampaigns(): Promise<WhatsAppCampaignItem[]> {
   return (data ?? []).map(rowToWhatsAppCampaign);
 }
 
+/** Un envío WhatsApp por id: para releer su estado después de despachar. */
+export async function listWhatsAppCampaign(id: string): Promise<WhatsAppCampaignItem | null> {
+  const client = ensureSupabase();
+  const { data, error } = await client
+    .from("whatsapp_campaigns")
+    .select(WA_CAMPAIGN_SELECT)
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? rowToWhatsAppCampaign(data) : null;
+}
+
 export type CreateWhatsAppCampaignInput = {
   templateName: string;
   templateLanguage: string;
   recipientCount: number;
+  // Arranca con la lista entera pendiente: la despacha el runner por lotes.
+  pendingCount: number;
   validationMetrics: WhatsAppCampaignItem["validationMetrics"];
   projectId: string | null;
 };
@@ -483,24 +468,16 @@ export async function createWhatsAppCampaign(input: CreateWhatsAppCampaignInput)
       template_name: input.templateName,
       template_language: input.templateLanguage,
       recipient_count: input.recipientCount,
+      pending_count: input.pendingCount,
       status: "queued",
       validation_metrics: input.validationMetrics,
       project_id: input.projectId,
-      created_by: DEFAULT_ACTOR_ID
+      created_by: getActorId()
     })
     .select(WA_CAMPAIGN_SELECT)
     .single();
   if (error) throw error;
   return rowToWhatsAppCampaign(data);
-}
-
-export async function updateWhatsAppCampaignStatus(
-  id: string,
-  status: WhatsAppCampaignItem["status"]
-): Promise<void> {
-  const client = ensureSupabase();
-  const { error } = await client.from("whatsapp_campaigns").update({ status }).eq("id", id);
-  if (error) throw error;
 }
 
 export async function deleteWhatsAppCampaign(id: string): Promise<void> {
@@ -527,7 +504,7 @@ export async function addWhatsAppCampaignRecipients(
       campaign_id: campaignId,
       phone: r.phone,
       variables: r.variables,
-      status: "sent"
+      status: "pending"
     }));
     const { error } = await client.from("whatsapp_campaign_recipients").insert(chunk);
     if (error) throw error;
@@ -674,7 +651,7 @@ export async function uploadAssetAndSave(file: File): Promise<AssetItem> {
       public_url: publicUrl,
       mime_type: file.type || null,
       size_bytes: file.size,
-      uploaded_by: DEFAULT_ACTOR_ID
+      uploaded_by: getActorId()
     })
     .select("id,name,kind,public_url,created_at")
     .single();

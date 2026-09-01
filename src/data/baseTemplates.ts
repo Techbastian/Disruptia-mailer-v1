@@ -6,6 +6,7 @@ export const BASE_TEMPLATES: BaseTemplate[] = [
   // ── 1. Citación a entrevistas (estilo clásico) ────────────────────────────
   {
     name: "Citación a entrevistas (clásico)",
+    subject: "Agendá tu espacio de conocimiento con Disruptia",
     description: "Correo para citar a un espacio de conocimiento o entrevista. Estilo corporativo azul/naranja.",
     variablesCsv: ["nombre"],
     variablesCampaign: ["link_agenda"],
@@ -71,6 +72,7 @@ export const BASE_TEMPLATES: BaseTemplate[] = [
   // ── 2. Citación a entrevistas (estilo moderno) ────────────────────────────
   {
     name: "Citación a entrevistas (moderno)",
+    subject: "Agendá tu espacio de conocimiento con Disruptia",
     description: "Correo para citar a un espacio de conocimiento o entrevista. Estilo moderno violeta con gradiente.",
     variablesCsv: ["nombre"],
     variablesCampaign: ["link_agenda"],
@@ -172,6 +174,7 @@ export const BASE_TEMPLATES: BaseTemplate[] = [
   // ── 3. Para quien no continúa ─────────────────────────────────────────────
   {
     name: "Para quien no continúa",
+    subject: "Resultado de tu proceso con Disruptia",
     description: "Correo para participantes que no avanzan en el proceso. Cierra con respeto y mantiene el vínculo con Disruptia.",
     variablesCsv: ["nombre"],
     variablesCampaign: ["link_plataforma"],
@@ -265,6 +268,7 @@ export const BASE_TEMPLATES: BaseTemplate[] = [
   // ── 4. Solicitar documentos ───────────────────────────────────────────────
   {
     name: "Solicitar documentos",
+    subject: "Nos faltan tus documentos para continuar",
     description: "Correo para solicitar documentos a participantes que cumplen requisitos. Lista los documentos requeridos con instrucciones claras.",
     variablesCsv: ["nombre"],
     variablesCampaign: [],
@@ -366,6 +370,7 @@ export const BASE_TEMPLATES: BaseTemplate[] = [
   // ── 5. Invitación a proyecto ──────────────────────────────────────────────
   {
     name: "Invitación a proyecto",
+    subject: "Te invitamos a hacer parte de este proyecto",
     description: "Correo para invitar a participantes a un nuevo proyecto o convocatoria. Incluye beneficios y dos CTAs: conocer el proyecto e inscribirse.",
     variablesCsv: ["nombre"],
     variablesCampaign: ["link_proyecto", "link_inscripcion"],
@@ -468,6 +473,7 @@ export const BASE_TEMPLATES: BaseTemplate[] = [
   // ── 6. Acceso a plataforma ────────────────────────────────────────────────
   {
     name: "Acceso a plataforma",
+    subject: "Tus datos de acceso a la plataforma Disruptia",
     description: "Correo para compartir credenciales de acceso a la plataforma Disruptia. Ideal para participantes registrados en ferias o eventos.",
     variablesCsv: ["nombre"],
     variablesCampaign: ["link_plataforma", "nombre_evento", "fecha_evento"],

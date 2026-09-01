@@ -197,10 +197,17 @@ export default function App() {
       {currentView === "campaign" && (
         <CampaignCreatorView
           templates={templates}
+          projects={projects}
           initialTemplateId={selectedTemplateId}
           onCampaignCreated={(campaign) => {
             addCampaign(campaign);
             setCurrentView("dashboard");
+          }}
+          onEditTemplate={(id) => {
+            // El asunto se edita en la plantilla: atajo desde el paso 1.
+            setAiDraft(null);
+            setSelectedTemplateId(id);
+            setCurrentView("template-editor");
           }}
         />
       )}

@@ -10,8 +10,8 @@ import {
   type WhatsAppInvalidRow,
   type WhatsAppMetrics
 } from "../lib/whatsappCsv";
-import { hasWhatsAppWebhookConfig, sendWhatsAppCampaign, sendWhatsAppTest, type WhatsAppRecipient } from "../lib/api";
-import { addWhatsAppCampaignRecipients, createWhatsAppCampaign, updateWhatsAppCampaignStatus } from "../lib/db";
+import { hasWhatsAppWebhookConfig, runDispatcher, sendWhatsAppTest, type WhatsAppRecipient } from "../lib/api";
+import { addWhatsAppCampaignRecipients, createWhatsAppCampaign, listWhatsAppCampaign } from "../lib/db";
 import { downloadWhatsAppCampaignReport } from "../lib/report";
 import StickyActions from "../components/StickyActions";
 import { extractWaVars, WhatsAppPreview } from "./WhatsAppTemplateEditorView";
@@ -179,33 +179,38 @@ export default function WhatsAppSendView({ templates, onManageTemplates, onCampa
         templateName: template.name,
         templateLanguage: template.language,
         recipientCount: recipients.length,
+        // La lista entera arranca pendiente: la despacha el runner por lotes.
+        pendingCount: recipients.length,
         validationMetrics: metrics,
         // El envío hereda el proyecto de la plantilla usada.
         projectId: template.projectId
       });
 
-      try {
-        await sendWhatsAppCampaign({
-          sendId: campaign.id,
-          template: { name: template.name, language: template.language },
-          recipients
-        });
-      } catch (webhookError) {
-        // No dejar la campaña zombie en "queued" si el webhook falló (paridad con email).
-        await updateWhatsAppCampaignStatus(campaign.id, "failed").catch(() => undefined);
-        throw webhookError;
-      }
-
-      // Evidencias: guardar los destinatarios y descargar el reporte del envío.
+      // Los destinatarios se guardan ANTES de despachar: si el envío falla igual
+      // queda la evidencia de a quiénes iba, y el runner sabe qué mandar.
       await addWhatsAppCampaignRecipients(
         campaign.id,
         recipients.map((r) => ({ phone: r.phone, variables: r.variables }))
-      ).catch((err) => console.error("No fue posible guardar los destinatarios del envío:", err));
-      await downloadWhatsAppCampaignReport(campaign).catch((err) =>
+      );
+
+      let dispatched: WhatsAppCampaignItem = campaign;
+      try {
+        const summary = await runDispatcher({ campaignId: campaign.id, trigger: "campaign" });
+        if (summary.errors.length > 0) throw new Error(summary.errors.join(" | "));
+        dispatched = (await listWhatsAppCampaign(campaign.id)) ?? campaign;
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `El envío quedó guardado con ${recipients.length} destinatarios pendientes, pero el despacho no arrancó. Reintentá desde el Dashboard. Detalle: ${detail}`
+        );
+      }
+
+      // Evidencias: reporte del envío (los destinatarios ya están guardados).
+      await downloadWhatsAppCampaignReport(dispatched).catch((err) =>
         console.error("No fue posible generar el reporte de evidencia:", err)
       );
 
-      onCampaignCreated(campaign);
+      onCampaignCreated(dispatched);
     } catch (err) {
       setSendResult({ ok: false, message: err instanceof Error ? err.message : "No fue posible iniciar el envío." });
     } finally {

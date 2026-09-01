@@ -1,16 +1,12 @@
-import { sendCampaign } from "./api";
-import {
-  countDispatchedToday,
-  fetchPendingRecipients,
-  getCampaignDispatchData,
-  markRecipientsDispatched,
-  setCampaignPendingCount,
-  updateCampaignStatus
-} from "./db";
+import { runDispatcher } from "./api";
+import { countDispatchedToday, getCampaignDispatchData } from "./db";
 
-// Cupo GLOBAL por día (hora local) sumando todas las campañas, para no
-// exceder el límite de la cuenta de Gmail.
+// Cupos GLOBALES por día (corte en America/Bogota) sumando todas las campañas:
+// protegen una cuenta de Gmail y un número de Meta, no una campaña.
+// OJO: estos valores están DUPLICADOS en la Edge Function `dispatch-runner`,
+// que es la que realmente los aplica. Si cambian, cambiarlos en los dos lados.
 export const DAILY_EMAIL_LIMIT = 1200;
+export const DAILY_WHATSAPP_LIMIT = 1000;
 
 export async function getRemainingDailyQuota(): Promise<number> {
   const dispatchedToday = await countDispatchedToday();
@@ -23,52 +19,27 @@ export type DispatchResult = {
 };
 
 /**
- * Despacha el siguiente lote de destinatarios pendientes de una campaña,
- * acotado por el cupo diario global. Reutiliza el html/asunto guardados en la
- * campaña, así los lotes de días posteriores salen idénticos al primero.
+ * Pide al despachador server-side que atienda esta campaña ya mismo y devuelve
+ * cuánto salió. El navegador ya no habla con N8N: solo dispara la corrida y
+ * relee el estado que dejó (pending_count es la fuente de verdad del progreso).
  */
 export async function dispatchNextBatch(campaignId: string): Promise<DispatchResult> {
-  const campaign = await getCampaignDispatchData(campaignId);
-  if (campaign.pendingCount <= 0) {
-    return { dispatched: 0, remainingPending: 0 };
-  }
-  if (!campaign.htmlSanitized) {
-    throw new Error("La campaña no tiene HTML guardado; no se puede despachar el lote.");
-  }
-
-  const quota = await getRemainingDailyQuota();
-  if (quota <= 0) {
-    throw new Error(
-      `Sin cupo disponible hoy (límite global: ${DAILY_EMAIL_LIMIT}/día). Enviá el lote mañana.`
-    );
-  }
-
-  const batch = await fetchPendingRecipients(campaignId, quota);
-  if (batch.length === 0) {
-    // pending_count desincronizado con la tabla: corregirlo.
-    await setCampaignPendingCount(campaignId, 0);
+  const before = await getCampaignDispatchData(campaignId);
+  if (before.pendingCount <= 0) {
     return { dispatched: 0, remainingPending: 0 };
   }
 
-  try {
-    await sendCampaign({
-      campaignId,
-      html: campaign.htmlSanitized,
-      subject: campaign.subject,
-      contacts: batch.map((r) => r.contact)
-    });
-  } catch (err) {
-    // El lote no salió: los destinatarios siguen pending y la campaña queda
-    // failed para que el Dashboard ofrezca reintentar (paridad con la creación).
-    await updateCampaignStatus(campaignId, "failed").catch(() => undefined);
-    throw err;
+  const summary = await runDispatcher({ campaignId, trigger: "manual" });
+  if (summary.skipped) {
+    throw new Error("Ya hay un despacho en curso. Esperá un momento y volvé a intentar.");
+  }
+  if (summary.errors.length > 0) {
+    throw new Error(summary.errors.join(" | "));
   }
 
-  await markRecipientsDispatched(batch.map((r) => r.id));
-  const remainingPending = Math.max(0, campaign.pendingCount - batch.length);
-  await setCampaignPendingCount(campaignId, remainingPending);
-  // N8N la marcará sent al terminar el despacho de este lote.
-  await updateCampaignStatus(campaignId, "queued").catch(() => undefined);
-
-  return { dispatched: batch.length, remainingPending };
+  const after = await getCampaignDispatchData(campaignId);
+  return {
+    dispatched: Math.max(0, before.pendingCount - after.pendingCount),
+    remainingPending: after.pendingCount
+  };
 }

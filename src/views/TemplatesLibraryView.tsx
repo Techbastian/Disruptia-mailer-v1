@@ -4,6 +4,7 @@ import type { AssetItem, EmailTemplate, Project } from "../types";
 import { sanitizeHtml } from "../lib/sanitizeHtml";
 import { generateTemplateHtml, pickBaseTemplate } from "../lib/ai";
 import { downloadContactsExcelTemplate } from "../lib/excelTemplate";
+import ProjectFilterBar, { type ProjectFilter } from "../components/ProjectFilterBar";
 
 type TemplatesLibraryViewProps = {
   templates: EmailTemplate[];
@@ -17,9 +18,6 @@ type TemplatesLibraryViewProps = {
   onAssignProject: (templateId: string, projectId: string | null) => Promise<EmailTemplate>;
   onAiDraftReady: (draft: { html: string; projectId: string | null }) => void;
 };
-
-// "all" = todas | "general" = solo agnosticas | <id> = proyecto (incluye General)
-type ProjectFilter = "all" | "general" | string;
 
 function VariableBadge({ label, kind }: { label: string; kind: "csv" | "campaign" }) {
   return (
@@ -228,47 +226,6 @@ function TemplateCard({
         </div>
       </div>
     </article>
-  );
-}
-
-// ── Filtro por proyecto ───────────────────────────────────────────────────────
-
-function ProjectFilterBar({
-  projects,
-  filter,
-  onChange,
-  counts
-}: {
-  projects: Project[];
-  filter: ProjectFilter;
-  onChange: (filter: ProjectFilter) => void;
-  counts: { all: number; general: number };
-}) {
-  const chip = (value: ProjectFilter, label: string, count?: number) => (
-    <button
-      key={value}
-      type="button"
-      onClick={() => onChange(value)}
-      className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold transition ${
-        filter === value
-          ? "bg-primary text-white"
-          : "border border-border text-text-muted hover:bg-surface"
-      }`}
-    >
-      {label}
-      {count !== undefined && (
-        <span className={`text-xs ${filter === value ? "text-white/70" : "text-text-muted"}`}>{count}</span>
-      )}
-    </button>
-  );
-
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      {chip("all", "Todas", counts.all)}
-      {chip("general", "General", counts.general)}
-      {projects.length > 0 && <span className="mx-1 h-5 w-px bg-border" />}
-      {projects.map((p) => chip(p.id, p.name))}
-    </div>
   );
 }
 

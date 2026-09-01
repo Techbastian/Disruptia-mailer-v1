@@ -16,10 +16,13 @@ type DashboardViewProps = {
 };
 
 const STATUS_MAP: Record<CampaignHistoryItem["status"], { label: string; className: string }> = {
-  sent:   { label: "Enviada",   className: "bg-success/10 text-success" },
-  failed: { label: "Fallida",   className: "bg-error/10 text-error" },
-  queued: { label: "En cola",   className: "bg-warning/15 text-yellow-700" },
-  draft:  { label: "Borrador",  className: "bg-surface text-text-muted" }
+  sent:      { label: "Enviada",     className: "bg-success/10 text-success" },
+  failed:    { label: "Fallida",     className: "bg-error/10 text-error" },
+  queued:    { label: "En cola",     className: "bg-warning/15 text-yellow-700" },
+  sending:   { label: "En curso",    className: "bg-primary/10 text-primary" },
+  scheduled: { label: "Programada",  className: "bg-primary/10 text-primary" },
+  canceled:  { label: "Cancelada",   className: "bg-surface text-text-muted" },
+  draft:     { label: "Borrador",    className: "bg-surface text-text-muted" }
 };
 
 function StatusBadge({ status }: { status: CampaignHistoryItem["status"] }) {

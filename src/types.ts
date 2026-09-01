@@ -37,7 +37,8 @@ export type CampaignHistoryItem = {
   recipients: number;
   // Destinatarios aún no despachados a N8N (batching por cupo diario).
   pendingCount: number;
-  status: "draft" | "queued" | "sent" | "failed";
+  // scheduled: espera su hora | sending: despachando lotes | canceled: cancelada.
+  status: "draft" | "scheduled" | "queued" | "sending" | "sent" | "failed" | "canceled";
   validationMetrics: CampaignMetrics | null;
   // Heredado de la plantilla usada (null = General).
   projectId: string | null;
@@ -54,6 +55,8 @@ export type EmailTemplate = {
   id: string;
   name: string;
   description: string;
+  // Asunto del correo: vive en la plantilla, se reutiliza en todos sus envios.
+  subject: string;
   html: string;
   variablesCsv: string[];
   variablesCampaign: string[];
@@ -75,7 +78,9 @@ export type WhatsAppCampaignItem = {
   templateName: string;
   templateLanguage: string;
   recipients: number;
-  status: "queued" | "sent" | "failed";
+  // Destinatarios aún no despachados (WhatsApp también batchea desde la fase 5).
+  pendingCount: number;
+  status: "scheduled" | "queued" | "sending" | "sent" | "failed" | "canceled";
   validationMetrics: WhatsAppCampaignMetrics | null;
   createdAt: string;
   // Heredado de la plantilla usada (null = General).

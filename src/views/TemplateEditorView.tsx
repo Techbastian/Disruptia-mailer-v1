@@ -21,6 +21,9 @@ type TemplateEditorViewProps = {
 
 const VAR_NAME_REGEX = /^[a-z0-9_]+$/;
 
+// El asunto es texto fijo: las variables no se sustituyen ahí (ver fase 0 del plan).
+const SUBJECT_VAR_REGEX = /\{\{[^}]*\}\}/;
+
 function extractTokens(html: string): string[] {
   const matches = [...html.matchAll(/\{\{([a-zA-Z0-9_]+)\}\}/g)];
   return [...new Set(matches.map((m) => m[1].toLowerCase()))];
@@ -118,6 +121,7 @@ export default function TemplateEditorView({
 
   const [name, setName] = useState(initialTemplate?.name ?? "");
   const [description, setDescription] = useState(initialTemplate?.description ?? "");
+  const [subject, setSubject] = useState(initialTemplate?.subject ?? "");
   const [html, setHtml] = useState(initialTemplate?.html ?? initialDraft?.html ?? "");
   const [variablesCsv, setVariablesCsv] = useState<string[]>(initialTemplate?.variablesCsv ?? []);
   const [variablesCampaign, setVariablesCampaign] = useState<string[]>(initialTemplate?.variablesCampaign ?? []);
@@ -219,6 +223,14 @@ export default function TemplateEditorView({
       setError("El nombre de la plantilla es obligatorio.");
       return;
     }
+    if (!subject.trim()) {
+      setError("El asunto es obligatorio: se usa en todos los envíos de esta plantilla.");
+      return;
+    }
+    if (SUBJECT_VAR_REGEX.test(subject)) {
+      setError("El asunto no admite variables {{...}}: es texto fijo para todos los destinatarios.");
+      return;
+    }
     setError("");
     setSaving(true);
     try {
@@ -226,6 +238,7 @@ export default function TemplateEditorView({
         id: initialTemplate?.id,
         name: name.trim(),
         description: description.trim(),
+        subject: subject.trim(),
         html,
         variablesCsv,
         variablesCampaign,
@@ -288,6 +301,23 @@ export default function TemplateEditorView({
                 onChange={(e) => setName(e.target.value)}
                 placeholder="ej. Citación a entrevistas"
               />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold">Asunto del correo</label>
+              <input
+                className="input mt-2"
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="ej. Agendá tu espacio de conocimiento con Disruptia"
+              />
+              <p className="mt-1.5 text-xs text-text-muted">
+                Se usa en todos los envíos de esta plantilla. Es texto fijo: no admite variables.
+              </p>
+              {SUBJECT_VAR_REGEX.test(subject) && (
+                <p className="mt-1 text-xs font-semibold text-error">
+                  El asunto no admite variables {"{{...}}"}. Si necesitás otro asunto, creá otra plantilla.
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-semibold">Descripción</label>
@@ -553,7 +583,7 @@ export default function TemplateEditorView({
 
           <TestEmailBox
             getHtml={() => sanitizeHtml(html)}
-            subject={name.trim() || "Plantilla sin nombre"}
+            subject={subject.trim() || name.trim() || "Plantilla sin asunto"}
             hint="Probá cómo se ve la plantilla en una bandeja real antes de guardarla. Las variables llegan como tokens {{...}}."
             disabled={!html.trim()}
           />
