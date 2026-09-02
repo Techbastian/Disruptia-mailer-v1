@@ -207,8 +207,11 @@ async function dispatchEmailBatch(campaign: EmailCampaign, quota: number): Promi
   await rest(`campaigns?id=eq.${campaign.id}`, {
     method: "PATCH",
     headers: { Prefer: "return=minimal" },
-    // Con pendientes sigue "en curso"; N8N la marca sent al terminar el ultimo lote.
-    body: JSON.stringify({ pending_count: remaining, status: remaining > 0 ? "sending" : "queued" })
+    // El estado final lo pone el runner, no N8N: desde que hay RLS el PATCH de N8N
+    // (que usa la anon key) no matchea ninguna fila y las campanias se quedaban
+    // "en cola" para siempre. Ademas N8N marcaba 'sent' al terminar CADA lote, lo
+    // que mentia en campanias multi-lote.
+    body: JSON.stringify({ pending_count: remaining, status: remaining > 0 ? "sending" : "sent" })
   });
 
   return { dispatched: batch.length };
@@ -259,7 +262,8 @@ async function dispatchWhatsAppBatch(campaign: WaCampaign, quota: number): Promi
   await rest(`whatsapp_campaigns?id=eq.${campaign.id}`, {
     method: "PATCH",
     headers: { Prefer: "return=minimal" },
-    body: JSON.stringify({ pending_count: remaining, status: remaining > 0 ? "sending" : "queued" })
+    // Mismo criterio que en email: el estado final lo pone el runner.
+    body: JSON.stringify({ pending_count: remaining, status: remaining > 0 ? "sending" : "sent" })
   });
 
   return { dispatched: batch.length };
