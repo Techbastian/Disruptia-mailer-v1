@@ -57,6 +57,7 @@ src/
     csv.ts         # CSV/XLSX → contacts, email validation + dedup
     whatsappCsv.ts # same for phones, normalized to E.164
     report.ts      # .txt evidence reports (auto-downloaded after each send)
+    schedule.ts    # America/Bogota helpers for the datetime-local inputs + day estimates
     sanitizeHtml.ts
   views/           # dashboard, campaign creator, email templates + editor, assets, WhatsApp templates + editor + send
   data/baseTemplates.ts      # 6 seed templates inserted on first run when email_templates is empty
@@ -99,6 +100,11 @@ Since phase 5 the browser **never** calls an N8N webhook. It persists the campai
    and decrement `pending_count`. The reserve-before-send is what keeps a dead run from re-sending a batch.
 4. No quota left is **not** a failure: the rest stays pending for the next run. Continuation batches (later
    days) only go out 08:00-20:00 Bogota; the first batch of a scheduled campaign goes at its `scheduled_at`.
+   Scheduling a campaign (step 3 of the creator, or `WhatsAppSendView`) writes `scheduled_at` + `status
+   "scheduled"` and does **not** call the runner — the N8N clock picks it up. The Dashboard can reschedule,
+   cancel (`status "canceled"`, which the runner filters out) or force it now (`scheduled_at` back to null +
+   an immediate run). A campaign already dispatching keeps its past `scheduled_at`, so "is it scheduled?"
+   means *its time has not come yet*, never just "the column is set".
 5. N8N still flips `campaigns.status` to `sent`/`failed` by PATCHing the REST API, so with multiple batches
    `status` lies — **`pending_count` is the source of truth for progress**, not `status`.
 
@@ -110,6 +116,13 @@ is what makes the Dashboard retry safe (no duplicate sends). Preserve it in any 
 
 The daily limits live in **two** places on purpose (`lib/dispatch.ts` for the UI copy, the Edge Function for
 enforcement). Change both.
+
+### Time zone
+
+Everything is **America/Bogota** (fixed -05:00, no DST), in three places that must agree: `lib/schedule.ts`
+(the datetime-local inputs), `db.ts::startOfDayBogotaIso` (the "today" counters on the Dashboard) and the
+Edge Function (quota + the 08:00-20:00 window). If one of them drifts to browser-local or UTC, the panel and
+the dispatcher start counting different days.
 
 ### Cross-cutting rules
 

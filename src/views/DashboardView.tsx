@@ -1,10 +1,174 @@
-import { useMemo, useState } from "react";
-import { FileText, Mail, MessageSquareText, RefreshCw, Send, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { CalendarClock, FileText, Mail, MessageSquareText, RefreshCw, Send, Trash2, X } from "lucide-react";
 import type { CampaignHistoryItem, WhatsAppCampaignItem } from "../types";
-import type { DispatchResult } from "../lib/dispatch";
+import { DAILY_EMAIL_LIMIT, DAILY_WHATSAPP_LIMIT, type DispatchResult } from "../lib/dispatch";
+import { cancelCampaign, countDispatchedToday, countWhatsAppSentToday, rescheduleCampaign } from "../lib/db";
+import { formatBogota, isPastSchedule, isoToScheduleInput, minScheduleInput, scheduleInputToIso } from "../lib/schedule";
 import { downloadEmailCampaignReport, downloadWhatsAppCampaignReport } from "../lib/report";
+import { runDispatcher } from "../lib/api";
 
 type Channel = "email" | "whatsapp";
+
+/**
+ * Una campaña ya despachando conserva su scheduled_at pasado, así que la fecha
+ * sola no alcanza: solo cuenta como "programada" mientras su hora no llegó.
+ */
+function isUpcoming(scheduledAt: string | null, status: string): scheduledAt is string {
+  if (!scheduledAt || status === "canceled") return false;
+  return new Date(scheduledAt).getTime() > Date.now();
+}
+
+
+// ── Acciones sobre una campaña programada ─────────────────────────────────────
+// Reprogramar y cancelar son solo cambios de scheduled_at/status: el despachador
+// se entera en su próxima corrida. "Enviar ahora" además le pide una corrida ya.
+
+function ScheduleActions({
+  id,
+  channel,
+  scheduledAt,
+  onDone
+}: {
+  id: string;
+  channel: Channel;
+  scheduledAt: string;
+  onDone: () => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [when, setWhen] = useState(() => isoToScheduleInput(scheduledAt));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function run(action: () => Promise<void>) {
+    setBusy(true);
+    setError("");
+    try {
+      await action();
+      await onDone();
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No fue posible actualizar la programación.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <span className="flex w-fit items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-semibold text-primary">
+        <CalendarClock size={12} />
+        {formatBogota(scheduledAt)}
+      </span>
+
+      {editing ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <input
+            type="datetime-local"
+            className="input py-1 text-xs"
+            value={when}
+            min={minScheduleInput()}
+            onChange={(e) => setWhen(e.target.value)}
+          />
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              if (!when || isPastSchedule(when)) {
+                setError("Elegí una fecha futura (hora de Bogotá).");
+                return;
+              }
+              void run(() => rescheduleCampaign(id, scheduleInputToIso(when), channel));
+            }}
+            className="rounded-lg bg-primary px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-50"
+          >
+            Guardar
+          </button>
+          <button
+            type="button"
+            onClick={() => setEditing(false)}
+            className="rounded-lg border border-border px-2.5 py-1 text-xs font-semibold hover:bg-surface"
+          >
+            <X size={12} />
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                await rescheduleCampaign(id, null, channel);
+                await runDispatcher({ campaignId: id, trigger: "manual" });
+              })
+            }
+            className="rounded-lg bg-primary px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-50"
+          >
+            {busy ? "…" : "Enviar ahora"}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setEditing(true)}
+            className="rounded-lg border border-border px-2.5 py-1 text-xs font-semibold hover:bg-surface disabled:opacity-50"
+          >
+            Reprogramar
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void run(() => cancelCampaign(id, channel))}
+            className="rounded-lg border border-error/40 px-2.5 py-1 text-xs font-semibold text-error hover:bg-error/5 disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+        </div>
+      )}
+
+      {error && <p className="text-xs text-error">{error}</p>}
+    </div>
+  );
+}
+
+// ── Panel "Hoy" ───────────────────────────────────────────────────────────────
+// Lo que salió HOY, con el corte del día en America/Bogota — el mismo que usan el
+// despachador y el cupo. Si contara con la hora del navegador, el panel y el
+// despachador mostrarían días distintos.
+
+function TodayCard({
+  label,
+  sent,
+  limit,
+  loading
+}: {
+  label: string;
+  sent: number | null;
+  limit: number;
+  loading: boolean;
+}) {
+  const value = sent ?? 0;
+  const pct = Math.min(100, Math.round((value / limit) * 100));
+  return (
+    <article className="card">
+      <p className="text-sm text-text-muted">{label}</p>
+      <p className="mt-2 font-heading text-3xl font-bold">
+        {loading && sent === null ? "…" : value}
+        <span className="ml-1 text-base font-semibold text-text-muted">/ {limit}</span>
+      </p>
+      <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-surface">
+        <div
+          className={`h-full rounded-full ${pct >= 100 ? "bg-error" : "bg-primary"}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <p className="mt-2 text-xs text-text-muted">
+        {value >= limit ? "Cupo agotado: el resto sale mañana." : `Quedan ${limit - value} de cupo hoy.`}
+      </p>
+    </article>
+  );
+}
+
+
 
 type DashboardViewProps = {
   campaigns: CampaignHistoryItem[];
@@ -296,6 +460,58 @@ export default function DashboardView({
   const channelIds = channel === "email" ? emailIds : waIds;
   const allSelected = channelIds.length > 0 && selectedIds.size === channelIds.length;
 
+  const [sentToday, setSentToday] = useState<number | null>(null);
+  const [waSentToday, setWaSentToday] = useState<number | null>(null);
+  const [countsLoading, setCountsLoading] = useState(true);
+
+  // Los contadores del día son propios de esta vista: se recargan al montar y
+  // con el botón Actualizar, junto con las tablas.
+  const loadCounts = useCallback(async () => {
+    setCountsLoading(true);
+    try {
+      const [emails, was] = await Promise.all([
+        countDispatchedToday().catch(() => null),
+        countWhatsAppSentToday().catch(() => null)
+      ]);
+      setSentToday(emails);
+      setWaSentToday(was);
+    } finally {
+      setCountsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCounts();
+  }, [loadCounts]);
+
+  const handleAfterSchedule = useCallback(async () => {
+    await onRefresh();
+    await loadCounts();
+  }, [onRefresh, loadCounts]);
+
+  // Programados a futuro, de los dos canales, para la sección "Próximos envíos".
+  const upcoming = useMemo(() => {
+    const now = Date.now();
+    const rows: { id: string; title: string; channel: Channel; at: string; pending: number }[] = [];
+    for (const c of campaigns) {
+      if (isUpcoming(c.scheduledAt, c.status)) {
+        rows.push({ id: c.id, title: c.title, channel: "email", at: c.scheduledAt, pending: c.pendingCount });
+      }
+    }
+    for (const c of whatsappCampaigns) {
+      if (isUpcoming(c.scheduledAt, c.status)) {
+        rows.push({
+          id: c.id,
+          title: c.templateName,
+          channel: "whatsapp",
+          at: c.scheduledAt,
+          pending: c.pendingCount
+        });
+      }
+    }
+    return rows.sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+  }, [campaigns, whatsappCampaigns]);
+
   const totalCampaigns = campaigns.length;
   const sentCampaigns = campaigns.filter((c) => c.status === "sent").length;
   const failedCampaigns = campaigns.filter((c) => c.status === "failed").length;
@@ -326,7 +542,10 @@ export default function DashboardView({
         </div>
         <button
           type="button"
-          onClick={() => void handleRefresh()}
+          onClick={() => {
+            void handleRefresh();
+            void loadCounts();
+          }}
           disabled={refreshing}
           className="btn-secondary flex items-center gap-2 text-sm disabled:opacity-50"
         >
@@ -334,6 +553,52 @@ export default function DashboardView({
           {refreshing ? "Actualizando…" : "Actualizar"}
         </button>
       </div>
+
+      {/* Panel "Hoy": lo que ya salió, sin importar el canal seleccionado */}
+      <div className="grid gap-4 md:grid-cols-3">
+        <TodayCard label="Correos enviados hoy" sent={sentToday} limit={DAILY_EMAIL_LIMIT} loading={countsLoading} />
+        <TodayCard label="WhatsApp enviados hoy" sent={waSentToday} limit={DAILY_WHATSAPP_LIMIT} loading={countsLoading} />
+        <article className="card">
+          <p className="text-sm text-text-muted">Próximos envíos</p>
+          <p className="mt-2 font-heading text-3xl font-bold text-primary">{upcoming.length}</p>
+          <p className="mt-3 text-xs text-text-muted">
+            {upcoming.length === 0
+              ? "No hay envíos programados a futuro."
+              : `El próximo: ${formatBogota(upcoming[0].at)}`}
+          </p>
+        </article>
+      </div>
+
+      {upcoming.length > 0 && (
+        <article className="card overflow-hidden p-0">
+          <header className="border-b border-border px-6 py-4">
+            <h2 className="font-heading text-xl font-semibold">Próximos envíos</h2>
+            <p className="mt-1 text-xs text-text-muted">Horarios de Bogotá.</p>
+          </header>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead>
+                <tr className="bg-surface">
+                  <th className="px-6 py-3 font-medium text-text-muted">Sale</th>
+                  <th className="px-6 py-3 font-medium text-text-muted">Canal</th>
+                  <th className="px-6 py-3 font-medium text-text-muted">Campaña</th>
+                  <th className="px-6 py-3 font-medium text-text-muted">Destinatarios</th>
+                </tr>
+              </thead>
+              <tbody>
+                {upcoming.map((row) => (
+                  <tr key={`${row.channel}-${row.id}`} className="border-t border-border">
+                    <td className="px-6 py-3 font-medium">{formatBogota(row.at)}</td>
+                    <td className="px-6 py-3 text-text-muted">{row.channel === "email" ? "Correo" : "WhatsApp"}</td>
+                    <td className="px-6 py-3">{row.title}</td>
+                    <td className="px-6 py-3">{row.pending}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      )}
 
       {/* Switch de canal: separa la sección de correos de la de WhatsApp */}
       <div className="inline-flex rounded-xl border border-border bg-card p-1">
@@ -496,7 +761,14 @@ export default function DashboardView({
                       </td>
                       <td className="px-6 py-4">{campaign.recipients}</td>
                       <td className="px-6 py-4">
-                        {campaign.pendingCount > 0 ? (
+                        {isUpcoming(campaign.scheduledAt, campaign.status) ? (
+                          <ScheduleActions
+                            id={campaign.id}
+                            channel="email"
+                            scheduledAt={campaign.scheduledAt}
+                            onDone={handleAfterSchedule}
+                          />
+                        ) : campaign.pendingCount > 0 ? (
                           <div className="flex items-center gap-2">
                             <span className="rounded-full bg-warning/15 px-2.5 py-0.5 text-xs font-semibold text-yellow-700">
                               {campaign.pendingCount}
@@ -603,6 +875,7 @@ export default function DashboardView({
                   <th className="px-6 py-3">Proyecto</th>
                   <th className="px-6 py-3">Fecha</th>
                   <th className="px-6 py-3">Destinatarios</th>
+                  <th className="px-6 py-3">Pendientes / programación</th>
                   <th className="px-6 py-3">Calidad de datos</th>
                   <th className="px-6 py-3">Estado</th>
                   <th className="px-6 py-3" />
@@ -611,7 +884,7 @@ export default function DashboardView({
               <tbody>
                 {whatsappCampaigns.length === 0 ? (
                   <tr>
-                    <td className="px-6 py-8 text-text-muted" colSpan={8}>
+                    <td className="px-6 py-8 text-text-muted" colSpan={9}>
                       Aún no hay envíos de WhatsApp registrados.
                     </td>
                   </tr>
@@ -639,6 +912,22 @@ export default function DashboardView({
                         {new Date(campaign.createdAt).toLocaleString("es-CO")}
                       </td>
                       <td className="px-6 py-4">{campaign.recipients}</td>
+                      <td className="px-6 py-4">
+                        {isUpcoming(campaign.scheduledAt, campaign.status) ? (
+                          <ScheduleActions
+                            id={campaign.id}
+                            channel="whatsapp"
+                            scheduledAt={campaign.scheduledAt}
+                            onDone={handleAfterSchedule}
+                          />
+                        ) : campaign.pendingCount > 0 ? (
+                          <span className="rounded-full bg-warning/15 px-2.5 py-0.5 text-xs font-semibold text-yellow-700">
+                            {campaign.pendingCount} pendientes
+                          </span>
+                        ) : (
+                          <span className="text-xs text-text-muted">—</span>
+                        )}
+                      </td>
                       <td className="px-6 py-4">
                         <WaQualityCell metrics={campaign.validationMetrics} />
                       </td>

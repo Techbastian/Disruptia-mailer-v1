@@ -20,6 +20,8 @@ type CreateCampaignInput = {
   pendingCount: number;
   validationMetrics: CampaignMetrics | null;
   projectId: string | null;
+  // null = sale en la próxima corrida del despachador.
+  scheduledAt?: string | null;
 };
 
 function ensureSupabase() {
@@ -30,7 +32,7 @@ function ensureSupabase() {
 }
 
 const CAMPAIGN_SELECT =
-  "id,title,status,recipient_count_estimate,pending_count,validation_metrics,project_id,projects(name),created_at";
+  "id,title,status,recipient_count_estimate,pending_count,scheduled_at,validation_metrics,project_id,projects(name),created_at";
 
 // PostgREST embebe la FK como objeto: projects: { name } | null.
 function embeddedProjectName(row: Record<string, unknown>): string | null {
@@ -45,6 +47,7 @@ function rowToCampaign(row: Record<string, unknown>): CampaignHistoryItem {
     status: row.status as CampaignHistoryItem["status"],
     recipients: (row.recipient_count_estimate as number) ?? 0,
     pendingCount: (row.pending_count as number) ?? 0,
+    scheduledAt: (row.scheduled_at as string | null) ?? null,
     validationMetrics: (row.validation_metrics as CampaignHistoryItem["validationMetrics"]) ?? null,
     projectId: (row.project_id as string | null) ?? null,
     projectName: embeddedProjectName(row),
@@ -71,12 +74,13 @@ export async function createCampaign(input: CreateCampaignInput): Promise<Campai
     .insert({
       title: input.title,
       subject: input.subject,
-      status: "queued",
+      status: input.scheduledAt ? "scheduled" : "queued",
       prompt: input.prompt || null,
       html_raw: input.htmlRaw || null,
       html_sanitized: input.htmlSanitized || null,
       recipient_count_estimate: input.recipientCountEstimate,
       pending_count: input.pendingCount,
+      scheduled_at: input.scheduledAt ?? null,
       validation_metrics: input.validationMetrics,
       project_id: input.projectId,
       created_by: getActorId()
@@ -125,6 +129,37 @@ async function countSentToday(table: string): Promise<number> {
     .gte("sent_at", startOfDayBogotaIso());
   if (error) throw error;
   return count ?? 0;
+}
+
+// ── Programación (fase 6) ─────────────────────────────────────────────────────
+// Reprogramar, cancelar y "enviar ahora" son solo cambios de scheduled_at/status:
+// el despachador decide sobre esas dos columnas en su próxima corrida.
+
+async function patchCampaignRow(
+  table: "campaigns" | "whatsapp_campaigns",
+  id: string,
+  patch: Record<string, unknown>
+): Promise<void> {
+  const client = ensureSupabase();
+  const { error } = await client.from(table).update(patch).eq("id", id);
+  if (error) throw error;
+}
+
+/** Cambia la fecha de salida. null = que salga cuanto antes. */
+export async function rescheduleCampaign(
+  id: string,
+  scheduledAt: string | null,
+  channel: "email" | "whatsapp" = "email"
+): Promise<void> {
+  await patchCampaignRow(channel === "email" ? "campaigns" : "whatsapp_campaigns", id, {
+    scheduled_at: scheduledAt,
+    status: scheduledAt ? "scheduled" : "queued"
+  });
+}
+
+/** Cancela: el runner ignora las canceladas y los pendientes quedan sin tocar. */
+export async function cancelCampaign(id: string, channel: "email" | "whatsapp" = "email"): Promise<void> {
+  await patchCampaignRow(channel === "email" ? "campaigns" : "whatsapp_campaigns", id, { status: "canceled" });
 }
 
 /** Correos despachados hoy (Bogotá) entre TODAS las campañas — cupo global diario. */
@@ -410,7 +445,7 @@ export async function deleteWhatsAppTemplate(id: string): Promise<void> {
 // ── WhatsApp campaigns (historial de envíos) ──────────────────────────────────
 
 const WA_CAMPAIGN_SELECT =
-  "id,template_name,template_language,recipient_count,pending_count,status,validation_metrics,project_id,projects(name),created_at";
+  "id,template_name,template_language,recipient_count,pending_count,scheduled_at,status,validation_metrics,project_id,projects(name),created_at";
 
 function rowToWhatsAppCampaign(row: Record<string, unknown>): WhatsAppCampaignItem {
   return {
@@ -419,6 +454,7 @@ function rowToWhatsAppCampaign(row: Record<string, unknown>): WhatsAppCampaignIt
     templateLanguage: (row.template_language as string) ?? "es",
     recipients: (row.recipient_count as number) ?? 0,
     pendingCount: (row.pending_count as number) ?? 0,
+    scheduledAt: (row.scheduled_at as string | null) ?? null,
     status: row.status as WhatsAppCampaignItem["status"],
     validationMetrics: (row.validation_metrics as WhatsAppCampaignItem["validationMetrics"]) ?? null,
     projectId: (row.project_id as string | null) ?? null,
@@ -456,6 +492,8 @@ export type CreateWhatsAppCampaignInput = {
   recipientCount: number;
   // Arranca con la lista entera pendiente: la despacha el runner por lotes.
   pendingCount: number;
+  // null = sale en la próxima corrida del despachador.
+  scheduledAt?: string | null;
   validationMetrics: WhatsAppCampaignItem["validationMetrics"];
   projectId: string | null;
 };
@@ -469,7 +507,8 @@ export async function createWhatsAppCampaign(input: CreateWhatsAppCampaignInput)
       template_language: input.templateLanguage,
       recipient_count: input.recipientCount,
       pending_count: input.pendingCount,
-      status: "queued",
+      scheduled_at: input.scheduledAt ?? null,
+      status: input.scheduledAt ? "scheduled" : "queued",
       validation_metrics: input.validationMetrics,
       project_id: input.projectId,
       created_by: getActorId()

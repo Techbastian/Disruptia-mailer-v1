@@ -39,6 +39,8 @@ export type CampaignHistoryItem = {
   pendingCount: number;
   // scheduled: espera su hora | sending: despachando lotes | canceled: cancelada.
   status: "draft" | "scheduled" | "queued" | "sending" | "sent" | "failed" | "canceled";
+  // Momento en que debe salir el primer lote (null = cuanto antes).
+  scheduledAt: string | null;
   validationMetrics: CampaignMetrics | null;
   // Heredado de la plantilla usada (null = General).
   projectId: string | null;
@@ -81,6 +83,7 @@ export type WhatsAppCampaignItem = {
   // Destinatarios aún no despachados (WhatsApp también batchea desde la fase 5).
   pendingCount: number;
   status: "scheduled" | "queued" | "sending" | "sent" | "failed" | "canceled";
+  scheduledAt: string | null;
   validationMetrics: WhatsAppCampaignMetrics | null;
   createdAt: string;
   // Heredado de la plantilla usada (null = General).

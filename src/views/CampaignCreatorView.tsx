@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, ChevronRight, FileSpreadsheet, Send, Trash2 } from "lucide-react";
+import { AlertTriangle, CalendarClock, CheckCircle2, ChevronRight, FileSpreadsheet, Send, Trash2 } from "lucide-react";
 import FileDropzone from "../components/FileDropzone";
 import StatCard from "../components/StatCard";
 import StickyActions from "../components/StickyActions";
@@ -14,6 +14,7 @@ import {
   getCampaignDispatchData
 } from "../lib/db";
 import { DAILY_EMAIL_LIMIT, getRemainingDailyQuota } from "../lib/dispatch";
+import { estimateDays, isPastSchedule, minScheduleInput, scheduleInputToIso } from "../lib/schedule";
 import { downloadEmailCampaignReport } from "../lib/report";
 import { downloadContactsExcelTemplate } from "../lib/excelTemplate";
 import { sanitizeHtml } from "../lib/sanitizeHtml";
@@ -447,9 +448,23 @@ function Step3({
   sending: boolean;
   onTitleChange: (title: string) => void;
   onBack: () => void;
-  onConfirm: (title: string) => Promise<void>;
+  onConfirm: (title: string, scheduledAt: string | null) => Promise<void>;
 }) {
   const [error, setError] = useState("");
+  const [mode, setMode] = useState<"now" | "schedule">("now");
+  const [when, setWhen] = useState("");
+  // Cupo que queda hoy: sirve para avisar cuántos días tomará el envío.
+  const [quotaToday, setQuotaToday] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    getRemainingDailyQuota()
+      .then((q) => alive && setQuotaToday(q))
+      .catch(() => alive && setQuotaToday(null));
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const previewHtml = useMemo(
     () => sanitizeHtml(substituteVars(template.html, campaignVars)),
@@ -463,9 +478,19 @@ function Step3({
       setError("El título de la campaña es obligatorio.");
       return;
     }
+    if (mode === "schedule") {
+      if (!when) {
+        setError("Elegí la fecha y hora del envío.");
+        return;
+      }
+      if (isPastSchedule(when)) {
+        setError("La fecha de envío tiene que ser futura (hora de Bogotá).");
+        return;
+      }
+    }
     setError("");
     try {
-      await onConfirm(title.trim());
+      await onConfirm(title.trim(), mode === "schedule" ? scheduleInputToIso(when) : null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "No fue posible enviar la campaña.");
     }
@@ -504,6 +529,74 @@ function Step3({
         </div>
       </article>
 
+      <article className="card space-y-4">
+        <div>
+          <p className="font-heading font-semibold">¿Cuándo sale?</p>
+          <p className="mt-0.5 text-xs text-text-muted">
+            Todos los horarios son de Bogotá. El despachador revisa cada 10 minutos.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setMode("now")}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition ${
+              mode === "now" ? "bg-primary text-white" : "border border-border text-text-muted hover:bg-surface"
+            }`}
+          >
+            <Send size={14} />
+            Enviar ahora
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("schedule")}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition ${
+              mode === "schedule" ? "bg-primary text-white" : "border border-border text-text-muted hover:bg-surface"
+            }`}
+          >
+            <CalendarClock size={14} />
+            Programar
+          </button>
+        </div>
+
+        {mode === "schedule" && (
+          <div>
+            <label className="block text-sm font-semibold" htmlFor="schedule-at">
+              Fecha y hora (Bogotá)
+            </label>
+            <input
+              id="schedule-at"
+              type="datetime-local"
+              className="input mt-2 max-w-[280px]"
+              value={when}
+              min={minScheduleInput()}
+              onChange={(e) => setWhen(e.target.value)}
+            />
+          </div>
+        )}
+
+        {quotaToday !== null && (
+          <p className="text-xs text-text-muted">
+            {mode === "now" ? (
+              <>
+                Quedan <strong>{quotaToday}</strong> correos de cupo hoy (límite {DAILY_EMAIL_LIMIT}/día entre todas
+                las campañas).{" "}
+                {recipientCount > quotaToday
+                  ? `Salen ${quotaToday} hoy y el resto sigue en los días siguientes: unos ${estimateDays(recipientCount, quotaToday, DAILY_EMAIL_LIMIT)} días en total.`
+                  : "Entra completa en el cupo de hoy."}
+              </>
+            ) : (
+              <>
+                El primer lote sale a la hora elegida; los lotes de días siguientes salen entre 08:00 y 20:00.
+                {recipientCount > DAILY_EMAIL_LIMIT &&
+                  ` Con ${recipientCount} destinatarios va a tomar unos ${Math.ceil(recipientCount / DAILY_EMAIL_LIMIT)} días.`}
+              </>
+            )}
+          </p>
+        )}
+      </article>
+
       <article className="card space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="font-heading text-sm font-semibold">Preview final</h2>
@@ -539,8 +632,14 @@ function Step3({
           disabled={sending}
           className="btn-primary flex items-center gap-2 disabled:opacity-40"
         >
-          <Send size={15} />
-          {sending ? "Enviando..." : `Aprobar y enviar a ${recipientCount} destinatarios`}
+          {mode === "schedule" ? <CalendarClock size={15} /> : <Send size={15} />}
+          {sending
+            ? mode === "schedule"
+              ? "Programando..."
+              : "Enviando..."
+            : mode === "schedule"
+              ? `Programar envío a ${recipientCount} destinatarios`
+              : `Aprobar y enviar a ${recipientCount} destinatarios`}
         </button>
       </StickyActions>
     </div>
@@ -589,7 +688,7 @@ export default function CampaignCreatorView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTemplate?.id, selectedTemplate?.subject]);
 
-  async function handleConfirm(title: string) {
+  async function handleConfirm(title: string, scheduledAt: string | null) {
     if (!selectedTemplate) return;
     setSending(true);
     try {
@@ -605,28 +704,33 @@ export default function CampaignCreatorView({
         recipientCountEstimate: contacts.length,
         pendingCount: contacts.length,
         validationMetrics: draft.metrics,
-        projectId: selectedTemplate.projectId
+        projectId: selectedTemplate.projectId,
+        scheduledAt
       });
       await createCampaignRun(campaign.id);
       await addCampaignRecipients(campaign.id, contacts);
 
       // El despacho es server-side: sale lo que permita el cupo del día y el
-      // resto queda pendiente para la próxima corrida del runner.
+      // resto queda pendiente para la próxima corrida del runner. Si está
+      // programada no se despacha nada ahora: la toma el runner a su hora.
       let remainingPending = contacts.length;
-      try {
-        const summary = await runDispatcher({ campaignId: campaign.id, trigger: "campaign" });
-        if (summary.errors.length > 0) throw new Error(summary.errors.join(" | "));
-        remainingPending = (await getCampaignDispatchData(campaign.id)).pendingCount;
-      } catch (err) {
-        // La campaña ya está guardada con su lista: no se pierde nada, se
-        // reintenta desde el Dashboard sin riesgo de duplicar envíos.
-        const detail = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `La campaña quedó guardada con ${contacts.length} destinatarios pendientes, pero el despacho no arrancó. Reintentá desde el Dashboard. Detalle: ${detail}`
-        );
+      if (!scheduledAt) {
+        try {
+          const summary = await runDispatcher({ campaignId: campaign.id, trigger: "campaign" });
+          if (summary.errors.length > 0) throw new Error(summary.errors.join(" | "));
+          remainingPending = (await getCampaignDispatchData(campaign.id)).pendingCount;
+        } catch (err) {
+          // La campaña ya está guardada con su lista: no se pierde nada, se
+          // reintenta desde el Dashboard sin riesgo de duplicar envíos.
+          const detail = err instanceof Error ? err.message : String(err);
+          throw new Error(
+            `La campaña quedó guardada con ${contacts.length} destinatarios pendientes, pero el despacho no arrancó. Reintentá desde el Dashboard. Detalle: ${detail}`
+          );
+        }
       }
 
-      // Reporte de evidencia: se descarga automáticamente tras cada envío.
+      // Evidencia: al enviar es el reporte del envío; al programar, el acta de
+      // lo que va a salir (todos los destinatarios figuran pendientes).
       await downloadEmailCampaignReport(campaign.id).catch((err) =>
         console.error("No fue posible generar el reporte de evidencia:", err)
       );

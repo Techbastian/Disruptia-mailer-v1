@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { CheckCircle2, Info, Send, Users, X } from "lucide-react";
+import { CalendarClock, CheckCircle2, Info, Send, Users, X } from "lucide-react";
 import FileDropzone from "../components/FileDropzone";
 import StatCard from "../components/StatCard";
 import type { WhatsAppCampaignItem, WhatsAppTemplate } from "../types";
@@ -14,6 +14,8 @@ import { hasWhatsAppWebhookConfig, runDispatcher, sendWhatsAppTest, type WhatsAp
 import { addWhatsAppCampaignRecipients, createWhatsAppCampaign, listWhatsAppCampaign } from "../lib/db";
 import { downloadWhatsAppCampaignReport } from "../lib/report";
 import StickyActions from "../components/StickyActions";
+import { isPastSchedule, minScheduleInput, scheduleInputToIso } from "../lib/schedule";
+import { DAILY_WHATSAPP_LIMIT } from "../lib/dispatch";
 import { extractWaVars, WhatsAppPreview } from "./WhatsAppTemplateEditorView";
 
 type Props = {
@@ -43,6 +45,8 @@ export default function WhatsAppSendView({ templates, onManageTemplates, onCampa
   const [mapping, setMapping] = useState<Record<number, VarMapping>>({});
 
   const [sending, setSending] = useState(false);
+  const [mode, setMode] = useState<"now" | "schedule">("now");
+  const [when, setWhen] = useState("");
   const [sendResult, setSendResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [testSending, setTestSending] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -167,6 +171,17 @@ export default function WhatsAppSendView({ templates, onManageTemplates, onCampa
 
   async function handleSendReal() {
     if (!template || !canSendReal) return;
+    if (mode === "schedule") {
+      if (!when) {
+        setSendResult({ ok: false, message: "Elegí la fecha y hora del envío." });
+        return;
+      }
+      if (isPastSchedule(when)) {
+        setSendResult({ ok: false, message: "La fecha de envío tiene que ser futura (hora de Bogotá)." });
+        return;
+      }
+    }
+    const scheduledAt = mode === "schedule" ? scheduleInputToIso(when) : null;
     setSending(true);
     setSendResult(null);
     try {
@@ -181,6 +196,7 @@ export default function WhatsAppSendView({ templates, onManageTemplates, onCampa
         recipientCount: recipients.length,
         // La lista entera arranca pendiente: la despacha el runner por lotes.
         pendingCount: recipients.length,
+        scheduledAt,
         validationMetrics: metrics,
         // El envío hereda el proyecto de la plantilla usada.
         projectId: template.projectId
@@ -194,15 +210,17 @@ export default function WhatsAppSendView({ templates, onManageTemplates, onCampa
       );
 
       let dispatched: WhatsAppCampaignItem = campaign;
-      try {
-        const summary = await runDispatcher({ campaignId: campaign.id, trigger: "campaign" });
-        if (summary.errors.length > 0) throw new Error(summary.errors.join(" | "));
-        dispatched = (await listWhatsAppCampaign(campaign.id)) ?? campaign;
-      } catch (err) {
-        const detail = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `El envío quedó guardado con ${recipients.length} destinatarios pendientes, pero el despacho no arrancó. Reintentá desde el Dashboard. Detalle: ${detail}`
-        );
+      if (!scheduledAt) {
+        try {
+          const summary = await runDispatcher({ campaignId: campaign.id, trigger: "campaign" });
+          if (summary.errors.length > 0) throw new Error(summary.errors.join(" | "));
+          dispatched = (await listWhatsAppCampaign(campaign.id)) ?? campaign;
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err);
+          throw new Error(
+            `El envío quedó guardado con ${recipients.length} destinatarios pendientes, pero el despacho no arrancó. Reintentá desde el Dashboard. Detalle: ${detail}`
+          );
+        }
       }
 
       // Evidencias: reporte del envío (los destinatarios ya están guardados).
@@ -443,6 +461,56 @@ export default function WhatsAppSendView({ templates, onManageTemplates, onCampa
             )}
           </article>
 
+          {/* Cuándo sale */}
+          <article className="card space-y-4">
+            <div>
+              <p className="font-heading font-semibold">¿Cuándo sale?</p>
+              <p className="mt-0.5 text-xs text-text-muted">
+                Horarios de Bogotá. El despachador revisa cada 10 minutos y manda hasta {DAILY_WHATSAPP_LIMIT}{" "}
+                mensajes por día.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setMode("now")}
+                className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition ${
+                  mode === "now" ? "bg-primary text-white" : "border border-border text-text-muted hover:bg-surface"
+                }`}
+              >
+                <Send size={14} />
+                Enviar ahora
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("schedule")}
+                className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition ${
+                  mode === "schedule"
+                    ? "bg-primary text-white"
+                    : "border border-border text-text-muted hover:bg-surface"
+                }`}
+              >
+                <CalendarClock size={14} />
+                Programar
+              </button>
+            </div>
+            {mode === "schedule" && (
+              <div>
+                <label className="block text-sm font-semibold" htmlFor="wa-schedule-at">
+                  Fecha y hora (Bogotá)
+                </label>
+                <input
+                  id="wa-schedule-at"
+                  type="datetime-local"
+                  className="input mt-2 max-w-[280px]"
+                  value={when}
+                  min={minScheduleInput()}
+                  onChange={(e) => setWhen(e.target.value)}
+                />
+              </div>
+            )}
+          </article>
+
           {/* Envío real */}
           {sendResult && !sendResult.ok && <p className="text-sm text-error">{sendResult.message}</p>}
           <StickyActions>
@@ -462,7 +530,12 @@ export default function WhatsAppSendView({ templates, onManageTemplates, onCampa
               {sending ? (
                 <>
                   <Send size={16} className="animate-pulse" />
-                  Enviando…
+                  {mode === "schedule" ? "Programando…" : "Enviando…"}
+                </>
+              ) : mode === "schedule" ? (
+                <>
+                  <CalendarClock size={16} />
+                  Programar envío ({contacts.length})
                 </>
               ) : (
                 <>
