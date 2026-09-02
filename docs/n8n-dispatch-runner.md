@@ -104,6 +104,29 @@ La app usa la **misma** función, con el cuerpo cambiado:
 | Crear campaña | `{"campaignId":"…","trigger":"campaign"}` | despacha esa campaña ya (ignora su programación) |
 | "Enviar lote" del Dashboard | `{"campaignId":"…","trigger":"manual"}` | ídem |
 | Envío de prueba | `{"test":{…}}` | reenvía al webhook con un id sintético `test-…`, sin tocar la base |
+| N8N al terminar un lote | `{"report":{"campaignId":"…","channel":"email","status":"failed"}}` | marca la campaña como fallida |
+
+### El reporte de resultado
+
+El estado **`sent` lo pone el runner**, no N8N: es el único que sabe si quedaron
+lotes pendientes (N8N solo ve el lote que acaba de procesar y en una campaña
+multi-lote diría "terminada" desde el primero).
+
+Lo que N8N sí sabe y el runner no es si **Gmail aceptó o rechazó** los correos.
+Por eso el workflow de correos cierra con el nodo **"Reportar resultado a la
+app"**, que postea `{"report": …}` a la función. Solo se aplica `status:
+"failed"` (que N8N manda cuando *ningún* correo del lote salió); los `sent` se
+ignoran y los ids `test-…` también.
+
+Ese reporte **no se autentica con el JWT sino con el secreto del webhook**
+(header `x-disruptia-webhook-secret`), que N8N ya tiene. Antes este nodo escribía
+directo a la tabla con la anon key: al activar RLS empezó a no matchear ninguna
+fila **devolviendo 200 igual**, así que las campañas se quedaban "En cola" para
+siempre sin que nada fallara a la vista.
+
+El workflow de WhatsApp no reporta nada: su nodo equivalente escribía `"sent"`
+fijo, sin detección de fallos, así que quedó **desactivado** — el runner ya hace
+ese trabajo.
 
 ## Secretos que necesita la función
 

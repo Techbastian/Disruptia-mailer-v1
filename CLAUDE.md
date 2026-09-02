@@ -105,8 +105,11 @@ Since phase 5 the browser **never** calls an N8N webhook. It persists the campai
    cancel (`status "canceled"`, which the runner filters out) or force it now (`scheduled_at` back to null +
    an immediate run). A campaign already dispatching keeps its past `scheduled_at`, so "is it scheduled?"
    means *its time has not come yet*, never just "the column is set".
-5. N8N still flips `campaigns.status` to `sent`/`failed` by PATCHing the REST API, so with multiple batches
-   `status` lies — **`pending_count` is the source of truth for progress**, not `status`.
+5. **The runner owns `status`**: `sending` while `pending_count > 0`, `sent` when it hits 0. N8N only reports
+   the one thing the runner cannot see — Gmail rejecting a whole batch — by POSTing `{report: …}` back to the
+   function (authenticated with the webhook secret, not the JWT); only `failed` is applied. N8N must never
+   write to the tables directly again: with RLS its anon-key PATCH matches no rows and still returns 200, so it
+   fails silently. `pending_count` remains the source of truth for progress.
 
 If a webhook call fails, the batch returns to `pending` and the campaign is force-marked `failed` — that pair
 is what makes the Dashboard retry safe (no duplicate sends). Preserve it in any change to this path.

@@ -405,6 +405,41 @@ async function runTest(test: TestPayload): Promise<void> {
   });
 }
 
+// ── Reporte de resultado desde N8N ───────────────────────────────────────────
+// N8N sabe algo que el runner no: si Gmail acepto o rechazo cada correo. Antes lo
+// escribia con un PATCH directo usando la anon key, pero al activar RLS ese PATCH
+// dejo de matchear filas (y devolvia 200 igual, asi que fallaba en silencio).
+// Ahora lo reporta aca y la function escribe con service_role.
+//
+// Solo se aplica 'failed': el estado 'sent' lo pone el runner cuando ya no quedan
+// pendientes, porque N8N solo ve el lote que acaba de procesar y en una campania
+// multi-lote diria "terminada" desde el primero.
+
+type ReportPayload = { campaignId?: string; channel?: string; status?: string };
+
+function isValidWebhookSecret(provided: string): boolean {
+  if (!provided) return false;
+  return (
+    (EMAIL_WEBHOOK_SECRET !== "" && provided === EMAIL_WEBHOOK_SECRET) ||
+    (WA_WEBHOOK_SECRET !== "" && provided === WA_WEBHOOK_SECRET)
+  );
+}
+
+async function runReport(report: ReportPayload): Promise<{ applied: boolean; reason?: string }> {
+  const id = (report.campaignId ?? "").trim();
+  // Los envios de prueba usan un id sintetico que no matchea ninguna fila.
+  if (!id || id.startsWith("test-")) return { applied: false, reason: "envio de prueba" };
+  if (report.status !== "failed") return { applied: false, reason: "solo se aplica 'failed'" };
+
+  const table = report.channel === "whatsapp" ? "whatsapp_campaigns" : "campaigns";
+  await rest(`${table}?id=eq.${id}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({ status: "failed" })
+  });
+  return { applied: true };
+}
+
 // ── Handler ──────────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
@@ -419,11 +454,23 @@ Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
   if (!SUPABASE_URL || !SERVICE_KEY) return json({ error: "Faltan SUPABASE_URL / SERVICE_ROLE_KEY" }, 500);
 
-  let body: { campaignId?: string; trigger?: string; test?: TestPayload } = {};
+  let body: { campaignId?: string; trigger?: string; test?: TestPayload; report?: ReportPayload } = {};
   try {
     body = await req.json();
   } catch {
     /* corrida completa sin cuerpo (N8N) */
+  }
+
+  // Reporte de N8N: se autentica con el secreto del webhook, no con el JWT.
+  if (body.report) {
+    if (!isValidWebhookSecret(req.headers.get(WEBHOOK_SECRET_HEADER) ?? "")) {
+      return json({ error: "Secreto de webhook invalido" }, 401);
+    }
+    try {
+      return json(await runReport(body.report));
+    } catch (err) {
+      return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
   }
 
   // Prueba: no toca la base ni el lock, solo reenvia al webhook.
